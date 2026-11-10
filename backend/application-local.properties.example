@@ -1,0 +1,8 @@
+# Copy to application-local.properties (git-ignored) and fill in. Environment variables work too.
+spring.mail.username=you@gmail.com
+spring.mail.password=your-gmail-app-password
+
+# Web push keys: generate a pair with `npx web-push generate-vapid-keys`,
+# then also set push.vapid.public-key (or VAPID_PUBLIC_KEY) to the public one.
+push.vapid.private-key=your-vapid-private-key
+push.vapid.subject=mailto:you@example.com

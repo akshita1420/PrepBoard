@@ -1,0 +1,23 @@
+# Private settings: never commit
+backend/application-local.properties
+.env
+.env.*
+
+# Dependencies and builds
+node_modules/
+frontend/.next/
+frontend/out/
+backend/target/
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs and test output
+*.log
+backend-test-output.txt
+
+# Editors and tools
+.idea/
+.vscode/
+.claude/
+*.iml
+.DS_Store

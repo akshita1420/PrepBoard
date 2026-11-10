@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0c0c0b;
+  --panel: #121210;
+  --panel-2: #171714;
+  --line: #262520;
+  --line-soft: #1c1b18;
+  --text: #ebe8e1;
+  --dim: #8d897f;
+  --mute: #5f5c55;
+  --amber: #f2b43c;
+  --amber-2: #df9426;
+  --amber-glow: rgba(242, 180, 60, 0.14);
+  --blue: #74b6ff;
+  --green: #8fd47e;
+  --red: #f0766b;
+  --purple: #c6a0ff;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-code: var(--font-mono), ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-code);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(242, 180, 60, 0.28);
+  color: #fff;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 99px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--mute);
+}
+
+input, textarea, select, button {
+  font-family: var(--font-code);
+}
+
+button {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}

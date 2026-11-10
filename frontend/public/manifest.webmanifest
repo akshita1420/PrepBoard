@@ -1,0 +1,10 @@
+{
+  "name": "PrepTracker",
+  "short_name": "PrepTracker",
+  "description": "Daily prep tracker with study nudges and streak tracking.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f11",
+  "theme_color": "#f59e0b",
+  "orientation": "portrait"
+}
