@@ -1,3 +1,11 @@
+{
+	servers {
+		# When another web server (e.g. nginx on the VPS) sits in front, keep its X-Forwarded-* headers
+		# so the backend knows the public address is https://<domain>.
+		trusted_proxies static private_ranges
+	}
+}
+
 # One domain for everything: /api/* goes to the Spring backend, the rest to the Next.js site.
 {$DOMAIN} {
 	encode gzip
