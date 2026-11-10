@@ -28,4 +28,7 @@ public class PushSubscription {
 
     @Column(nullable = false)
     private String auth;
+
+    // The user this browser belongs to; nudges are pushed only to their own browsers.
+    private Long userId;
 }

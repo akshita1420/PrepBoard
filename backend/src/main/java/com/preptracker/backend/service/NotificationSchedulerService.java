@@ -155,7 +155,7 @@ public class NotificationSchedulerService {
                 );
 
                 if (pushNotificationService != null) {
-                    pushNotificationService.sendToAll("Daily prep nudge", "Complete LeetCode: " + nudgeSubtitle(remaining) + ".");
+                    pushNotificationService.sendToUser(user.getId(), "Daily prep nudge", "Complete LeetCode: " + nudgeSubtitle(remaining) + ".");
                 }
             } catch (Exception e) {
                 System.err.println("Error processing notification time for user " + user.getEmail() + ": " + e.getMessage());

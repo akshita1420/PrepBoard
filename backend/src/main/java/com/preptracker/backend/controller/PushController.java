@@ -1,6 +1,8 @@
 package com.preptracker.backend.controller;
 
+import com.preptracker.backend.AuthInterceptor;
 import com.preptracker.backend.service.PushNotificationService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,19 +23,18 @@ public class PushController {
         return ResponseEntity.ok(Map.of("publicKey", pushNotificationService.getPublicKey()));
     }
 
+    // Saves this browser's push subscription for the signed-in user only.
     @PostMapping("/subscribe")
-    public ResponseEntity<Void> subscribe(@RequestBody Map<String, String> payload) {
-        String endpoint = payload.get("endpoint");
-        String p256dh = payload.get("p256dh");
-        String auth = payload.get("auth");
-
-        pushNotificationService.saveSubscription(endpoint, p256dh, auth);
+    public ResponseEntity<Void> subscribe(@RequestBody Map<String, String> payload, HttpServletRequest request) {
+        pushNotificationService.saveSubscription(
+                AuthInterceptor.currentUser(request).getId(),
+                payload.get("endpoint"), payload.get("p256dh"), payload.get("auth"));
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/send-test")
-    public ResponseEntity<Map<String, String>> sendTest() {
-        pushNotificationService.sendToAll("PrepTracker", "Test notification from the backend.");
+    public ResponseEntity<Map<String, String>> sendTest(HttpServletRequest request) {
+        pushNotificationService.sendToUser(AuthInterceptor.currentUser(request).getId(), "prepboard", "Test notification from the backend.");
         return ResponseEntity.ok(Map.of("status", "queued"));
     }
 }

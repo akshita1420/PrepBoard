@@ -37,6 +37,10 @@ public class User {
     // Show the pixel car banner (via the desktop helper, or on this PC) at notificationTime and 9 pm.
     private Boolean desktopNudge;
 
+    // BCrypt hash of the user's password. Never sent to the browser.
+    @JsonIgnore
+    private String passwordHash;
+
     // One-time code for linking a desktop helper; short-lived.
     @JsonIgnore
     private String agentLinkCode;

@@ -55,35 +55,7 @@ public class UserController {
         return ResponseEntity.ok(Map.of("unlinked", true));
     }
 
-    // 1. Create or login existing user by email or username
-    @PostMapping
-    public ResponseEntity<User> createOrGetUser(@RequestBody User user) {
-        // Try finding by email first, then by leetcodeUsername
-        return userRepository.findFirstByEmail(user.getEmail())
-                .or(() -> userRepository.findFirstByLeetcodeUsername(user.getLeetcodeUsername()))
-                .map(existingUser -> {
-                    existingUser.setLeetcodeUsername(user.getLeetcodeUsername());
-                    if (user.getName() != null && !user.getName().isBlank()) {
-                        existingUser.setName(user.getName());
-                    }
-                    if (user.getEmail() != null && !user.getEmail().isBlank()) {
-                        existingUser.setEmail(user.getEmail());
-                    }
-                    return ResponseEntity.ok(userRepository.save(existingUser));
-                })
-                .orElseGet(() -> {
-                    if (user.getTimezone() == null) {
-                        user.setTimezone("UTC");
-                    }
-                    return new ResponseEntity<>(userRepository.save(user), HttpStatus.CREATED);
-                });
-    }
-
-    // 2. Retrieve all registered users
-    @GetMapping
-    public ResponseEntity<List<User>> getAllUsers() {
-        return ResponseEntity.ok(userRepository.findAll());
-    }
+    // Accounts are created and opened through /api/auth (email + password).
 
     public record LeetCodeSessionRequest(String session, String csrfToken) {}
 

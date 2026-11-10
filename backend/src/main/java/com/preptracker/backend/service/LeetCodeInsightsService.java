@@ -326,9 +326,9 @@ public class LeetCodeInsightsService {
                     if (Boolean.TRUE.equals(user.getDesktopNudge()) && desktopNudgeService.isSupported() && !hasHelper) {
                         desktopNudgeService.show("REGISTER FOR " + title, title + " " + when);
                     }
-                }
-                if (pushNotificationService != null) {
-                    pushNotificationService.sendToAll("Register for " + title, title + " " + when + ". Register on LeetCode, then tick it off in prepboard.");
+                    if (pushNotificationService != null) {
+                        pushNotificationService.sendToUser(user.getId(), "Register for " + title, title + " " + when + ". Register on LeetCode, then tick it off in prepboard.");
+                    }
                 }
             }
         }

@@ -28,6 +28,30 @@ docker compose up -d --build
 
 Open `https://<your domain>`. Caddy gets the HTTPS certificate automatically on first visit.
 
+### If the VPS already runs a web server
+
+`docker compose up` fails with "port is already allocated" when nginx/Apache/another Caddy already uses 80/443
+(check with `ss -ltnp | grep -E ':80 |:443 '`). Then let that server keep the ports and pass prepboard through it:
+
+1. In `.env` set `HTTP_PORT=8088`, `HTTPS_PORT=8443` and `DOMAIN=:80` (prepboard's Caddy then serves plain HTTP inside).
+2. `docker compose up -d --build`
+3. Add a site for your domain to the existing server, e.g. for nginx (`/etc/nginx/sites-available/prepboard`):
+
+   ```nginx
+   server {
+       server_name prepboard.aravindc.dev;
+       location / {
+           proxy_pass http://127.0.0.1:8088;
+           proxy_set_header Host $host;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+   }
+   ```
+
+   then `ln -s /etc/nginx/sites-available/prepboard /etc/nginx/sites-enabled/ && nginx -t && systemctl reload nginx`
+   and get HTTPS with `certbot --nginx -d prepboard.aravindc.dev`.
+
 VAPID keys for browser push: run `npx web-push generate-vapid-keys` anywhere and paste both into `.env`.
 
 ## 3. Auto-deploy from GitHub (once)
@@ -54,7 +78,8 @@ download the helper, double-click `install.cmd`, paste the code. From then on th
 nudge time and at 9 pm (their own time zone) and before contests, with the website closed.
 Their laptop just needs to be on, signed in to Windows, and online.
 
-## Before inviting other people
+## Sharing with friends
 
-There's no password yet: anyone who knows a user's email and LeetCode username can open that dashboard.
-Add real sign-in before sharing the link widely.
+Send them `https://<your domain>`. Each person clicks **sign up** (name, email, LeetCode username, password).
+Accounts are separate: nobody can see or change anyone else's data, and one LeetCode username can belong to
+only one account.

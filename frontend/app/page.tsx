@@ -178,6 +178,21 @@ function getGreeting(): string {
 // Where the backend lives. Empty = same domain as the site (the VPS setup, where Caddy routes /api to the backend).
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
+const TOKEN_KEY = "preptracker_token";
+const SESSION_EXPIRED_EVENT = "prepboard:session-expired";
+
+// fetch() for our API: sends the signed-in session, and signals when the server says it's no longer valid.
+async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const token = typeof window !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(url, { ...init, headers });
+  if (res.status === 401 && !url.includes("/api/auth/") && typeof window !== "undefined") {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
+  return res;
+}
+
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const normalized = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -243,7 +258,7 @@ async function subscribeToPushNotifications(): Promise<boolean> {
     const registration = await registerServiceWorker();
     if (!registration) return false;
 
-    const response = await fetch(`${API_BASE}/api/v1/push/public-key`);
+    const response = await apiFetch(`${API_BASE}/api/v1/push/public-key`);
     if (!response.ok) return false;
 
     const { publicKey } = await response.json();
@@ -255,7 +270,7 @@ async function subscribeToPushNotifications(): Promise<boolean> {
     const p256dhKey = subscription.getKey("p256dh");
     const authKey = subscription.getKey("auth");
 
-    await fetch(`${API_BASE}/api/v1/push/subscribe`, {
+    await apiFetch(`${API_BASE}/api/v1/push/subscribe`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -469,6 +484,9 @@ export default function Home() {
   const [email, setEmail] = useState("");
   const [leetcodeUsername, setLeetcodeUsername] = useState("");
   const [authError, setAuthError] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [password, setPassword] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
 
   // Data
   const [logs, setLogs] = useState<LeetCodeLog[]>([]);
@@ -557,11 +575,18 @@ export default function Home() {
   // ── Session restore ──────────────────────────────────────────────────────────
   useEffect(() => {
     const savedUser = localStorage.getItem("preptracker_user");
-    if (savedUser) {
+    // Old saved logins (from before passwords) have no session token; they need to sign in again.
+    if (savedUser && localStorage.getItem(TOKEN_KEY)) {
       const user = JSON.parse(savedUser);
       setCurrentUser(user);
       loadDashboard(user);
+    } else if (savedUser) {
+      localStorage.removeItem("preptracker_user");
     }
+    // Any request the server rejects as "not logged in" (e.g. session expired) sends you back to sign in.
+    const onExpired = () => handleLogout();
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
   }, []);
 
   // ── Ctrl/⌘+K focuses the jump-to search ─────────────────────────────────────
@@ -652,7 +677,7 @@ export default function Home() {
   const loadDashboard = async (user: User, attempt = 0) => {
     let up = false;
     try {
-      up = (await fetch(`${API_BASE}/api/v1/users/${user.id}`)).ok;
+      up = (await apiFetch(`${API_BASE}/api/v1/users/${user.id}`)).ok;
     } catch { /* not up yet */ }
     if (!up) {
       if (attempt < 36) setTimeout(() => loadDashboard(user, attempt + 1), 5000);
@@ -668,7 +693,7 @@ export default function Home() {
 
   const fetchLogs = async (username: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/leetcode/logs/${username}?t=${Date.now()}`);
+      const res = await apiFetch(`${API_BASE}/api/leetcode/logs/${username}?t=${Date.now()}`);
       if (res.ok) setLogs(await res.json());
     } catch { /* backend may be offline */ }
   };
@@ -678,7 +703,7 @@ export default function Home() {
   const fetchQuestionMeta = async (username: string, attempt = 0) => {
     let retry = false;
     try {
-      const res = await fetch(`${API_BASE}/api/leetcode/${username}/questions`);
+      const res = await apiFetch(`${API_BASE}/api/leetcode/${username}/questions`);
       if (res.ok) {
         const body: { pending: number; questions: QuestionDetails[] } = await res.json();
         setQuestionMeta(Object.fromEntries(body.questions.map((q) => [q.titleSlug, q])));
@@ -698,9 +723,9 @@ export default function Home() {
     fetchQuestionMeta(username);
     try {
       const [upcomingRes, historyRes, regRes] = await Promise.all([
-        fetch(`${API_BASE}/api/leetcode/contests/upcoming`),
-        fetch(`${API_BASE}/api/leetcode/${username}/contests`),
-        fetch(`${API_BASE}/api/v1/users/${userId}/contests/registered`),
+        apiFetch(`${API_BASE}/api/leetcode/contests/upcoming`),
+        apiFetch(`${API_BASE}/api/leetcode/${username}/contests`),
+        apiFetch(`${API_BASE}/api/v1/users/${userId}/contests/registered`),
       ]);
       if (upcomingRes.ok) setContests(await upcomingRes.json());
       if (historyRes.ok) setContestHistory(await historyRes.json());
@@ -719,13 +744,13 @@ export default function Home() {
     setRegisteredContests((list) => isRegistered ? list.filter((s) => s !== contest.titleSlug) : [...list, contest.titleSlug]);
     if (!isRegistered) fireConfetti(rect.left + rect.width / 2, rect.top + rect.height / 2);
     try {
-      await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/contests/${contest.titleSlug}/registered`, { method: isRegistered ? "DELETE" : "PUT" });
+      await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/contests/${contest.titleSlug}/registered`, { method: isRegistered ? "DELETE" : "PUT" });
     } catch { /* backend may be offline */ }
   };
 
   const fetchStats = async (username: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/leetcode/${username}?t=${Date.now()}`);
+      const res = await apiFetch(`${API_BASE}/api/leetcode/${username}?t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         const subs = data?.data?.matchedUser?.submitStats?.acSubmissionNum ?? [];
@@ -743,7 +768,7 @@ export default function Home() {
   // Live list of every accepted solve LeetCode exposes (full history if the backend has a LeetCode login, else the last 20).
   const fetchSubmissionHistory = async (username: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/leetcode/${username}/history?t=${Date.now()}`);
+      const res = await apiFetch(`${API_BASE}/api/leetcode/${username}/history?t=${Date.now()}`);
       if (!res.ok) return;
       const history = await res.json();
       const solves: { title: string; titleSlug: string; difficulty?: string | null; timestamp: number | string }[] =
@@ -760,7 +785,7 @@ export default function Home() {
   // Saves new solves to the database so older days stay on the calendar, then refreshes the saved list.
   const syncInBackground = async (username: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/leetcode/${username}/sync`, { method: "POST" });
+      const res = await apiFetch(`${API_BASE}/api/leetcode/${username}/sync`, { method: "POST" });
       if (res.ok) {
         setLogs(await res.json());
         fetchQuestionMeta(username);
@@ -776,7 +801,7 @@ export default function Home() {
   // Picks up server-side changes to the saved user, such as whether LeetCode is connected.
   const refreshUser = async (id: number) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/users/${id}`);
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${id}`);
       if (!res.ok) return;
       const user: User = await res.json();
       saveUser(user);
@@ -789,7 +814,7 @@ export default function Home() {
   const saveNudgeToBackend = async (change: { time?: string; desktop?: boolean }, id = currentUser?.id) => {
     if (!id) return null;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/users/${id}/nudge`, {
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${id}/nudge`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         // The server fires nudges in each user's own time zone, taken from their browser.
@@ -806,7 +831,7 @@ export default function Home() {
 
   const fetchAgents = async (userId: number) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/users/${userId}/agents`);
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${userId}/agents`);
       if (res.ok) setAgents(await res.json());
     } catch { /* backend may be offline */ }
   };
@@ -815,7 +840,7 @@ export default function Home() {
   const getAgentCode = async () => {
     if (!currentUser) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/agent/code`, { method: "POST" });
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/agent/code`, { method: "POST" });
       if (!res.ok) return;
       const body: { code: string; expiresInMinutes: number } = await res.json();
       setAgentCode({ code: body.code, expiresAt: Date.now() + body.expiresInMinutes * 60000 });
@@ -825,7 +850,7 @@ export default function Home() {
       const watch = async () => {
         tries++;
         try {
-          const r = await fetch(`${API_BASE}/api/v1/users/${userId}/agents`);
+          const r = await apiFetch(`${API_BASE}/api/v1/users/${userId}/agents`);
           if (r.ok) {
             const list = await r.json();
             setAgents(list);
@@ -846,7 +871,7 @@ export default function Home() {
   const unlinkAgent = async (deviceId: number) => {
     if (!currentUser) return;
     try {
-      await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/agents/${deviceId}`, { method: "DELETE" });
+      await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/agents/${deviceId}`, { method: "DELETE" });
       fetchAgents(currentUser.id);
     } catch { /* backend may be offline */ }
   };
@@ -855,7 +880,7 @@ export default function Home() {
     if (!currentUser) return;
     setDesktopNudgeMsg("");
     try {
-      const res = await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/nudge/test`, { method: "POST" });
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/nudge/test`, { method: "POST" });
       const body = await res.json().catch(() => null);
       setDesktopNudgeMsg(res.ok
         ? body?.local ? "// look at the top of your screen →" : "// your laptop's helper shows it within a minute →"
@@ -879,7 +904,7 @@ export default function Home() {
     setConnectStatus("checking");
     setConnectMessage("");
     try {
-      const res = await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/leetcode-session`, {
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/leetcode-session`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session: sessionInput, csrfToken: csrfInput }),
@@ -894,7 +919,7 @@ export default function Home() {
       setSessionInput("");
       setCsrfInput("");
       setConnectStatus("importing");
-      const sync = await fetch(`${API_BASE}/api/leetcode/${currentUser.leetcodeUsername}/sync`, { method: "POST" });
+      const sync = await apiFetch(`${API_BASE}/api/leetcode/${currentUser.leetcodeUsername}/sync`, { method: "POST" });
       if (sync.ok) {
         const saved: LeetCodeLog[] = await sync.json();
         setLogs(saved);
@@ -914,7 +939,7 @@ export default function Home() {
   const handleDisconnectLeetCode = async () => {
     if (!currentUser) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/leetcode-session`, { method: "DELETE" });
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/leetcode-session`, { method: "DELETE" });
       if (res.ok) {
         saveUser(await res.json());
         setConnectStatus("idle");
@@ -928,7 +953,7 @@ export default function Home() {
     setSyncing(true);
     setSyncMessage("");
     try {
-      const res = await fetch(`${API_BASE}/api/leetcode/${currentUser.leetcodeUsername}/sync`, { method: "POST" });
+      const res = await apiFetch(`${API_BASE}/api/leetcode/${currentUser.leetcodeUsername}/sync`, { method: "POST" });
       if (res.ok) {
         await fetchLogs(currentUser.leetcodeUsername);
         await fetchSubmissionHistory(currentUser.leetcodeUsername);
@@ -945,29 +970,39 @@ export default function Home() {
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError("");
-    if (!email || !leetcodeUsername) { setAuthError("Please fill in all fields."); return; }
+    const signingUp = authMode === "signup";
+    if (!email || !password || (signingUp && !leetcodeUsername)) { setAuthError("Please fill in all fields."); return; }
+    setAuthBusy(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/users`, {
+      const res = await fetch(`${API_BASE}/api/auth/${signingUp ? "register" : "login"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name || leetcodeUsername, email, leetcodeUsername }),
+        body: JSON.stringify(signingUp ? { name: name || leetcodeUsername, email, leetcodeUsername, password } : { email, password }),
       });
-      if (res.ok) {
-        const user: User = await res.json();
-        setCurrentUser(user);
-        localStorage.setItem("preptracker_user", JSON.stringify(user));
-        fetchLogs(user.leetcodeUsername);
-        fetchSubmissionHistory(user.leetcodeUsername);
-        fetchStats(user.leetcodeUsername);
-        syncInBackground(user.leetcodeUsername);
-        loadInsights(user.leetcodeUsername, user.id);
-      } else {
-        setAuthError("Failed to create account. Check your details.");
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setAuthError(body?.error ?? "Couldn't sign you in. Check your details.");
+        return;
       }
-    } catch { setAuthError("Cannot connect to backend. Is it running?"); }
+      const user: User = body.user;
+      localStorage.setItem(TOKEN_KEY, body.token);
+      localStorage.setItem("preptracker_user", JSON.stringify(user));
+      setPassword("");
+      setCurrentUser(user);
+      loadDashboard(user);
+      // New browsers save the nudge time and time zone on the account straight away.
+      if (signingUp) saveNudgeToBackend({ time: nudge.time }, user.id);
+    } catch {
+      setAuthError("Cannot connect to the server. Try again in a moment.");
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   const handleLogout = () => {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (token) fetch(`${API_BASE}/api/auth/logout`, { method: "POST", headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+    localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem("preptracker_user");
     setCurrentUser(null);
     setLogs([]);
@@ -1460,6 +1495,10 @@ export default function Home() {
           .t-input::placeholder { color: #4a4843; }
           .t-err { color: #f0766b; font-size: 12.5px; display: flex; align-items: center; gap: 6px; margin: 4px 0 10px; }
           .t-btn { width: 100%; margin-top: 8px; display: flex; align-items: center; justify-content: center; gap: 10px; background: #f2b43c; color: #0c0c0b; border: none; border-radius: 6px; padding: 13px; font-weight: 800; font-size: 14px; transition: transform .15s, box-shadow .2s, background .2s; }
+          .t-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+          .t-tab { flex: 1; background: transparent; border: 1px solid #262520; border-radius: 6px; color: #8d897f; padding: 9px; font-size: 13px; transition: color .2s, border-color .2s, background .2s; }
+          .t-tab.on { color: #f2b43c; border-color: rgba(242,180,60,.5); background: rgba(242,180,60,.06); }
+          .t-btn:disabled { opacity: .7; cursor: progress; }
           .t-btn:hover { background: #f6c25a; box-shadow: 0 10px 30px rgba(242,180,60,0.25); transform: translateY(-1px); }
           .t-caret { display: inline-block; width: 8px; height: 16px; background: #f2b43c; vertical-align: -2px; margin-left: 4px; animation: blink 1.05s steps(1) infinite; }
           @keyframes blink { 50% { opacity: 0; } }
@@ -1480,22 +1519,34 @@ export default function Home() {
             </div>
             <p className="t-cm">{"// "}small reps compound. show up, then look back.</p>
             <p className="t-prompt"><span className="a">➜</span> <span className="p">~/prepboard</span> <span className="s">$</span> ./start-session<span className="t-caret" /></p>
+            <div className="t-tabs" role="tablist">
+              <button type="button" role="tab" aria-selected={authMode === "login"} className={`t-tab${authMode === "login" ? " on" : ""}`} onClick={() => { setAuthMode("login"); setAuthError(""); }}>log in</button>
+              <button type="button" role="tab" aria-selected={authMode === "signup"} className={`t-tab${authMode === "signup" ? " on" : ""}`} onClick={() => { setAuthMode("signup"); setAuthError(""); }}>sign up</button>
+            </div>
             <form onSubmit={handleAuth}>
-              <label className="t-field">
-                <span className="t-key">name<i>:</i></span>
-                <input className="t-input" type="text" placeholder="Akshita Sahu" value={name} onChange={e => setName(e.target.value)} />
-              </label>
+              {authMode === "signup" && (
+                <label className="t-field">
+                  <span className="t-key">name<i>:</i></span>
+                  <input className="t-input" type="text" placeholder="Akshita Sahu" value={name} onChange={e => setName(e.target.value)} autoComplete="name" />
+                </label>
+              )}
               <label className="t-field">
                 <span className="t-key">email<i>:</i></span>
-                <input className="t-input" type="email" required placeholder="you@example.com" value={email} onChange={e => setEmail(e.target.value)} />
+                <input className="t-input" type="email" required placeholder="you@example.com" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" />
               </label>
+              {authMode === "signup" && (
+                <label className="t-field">
+                  <span className="t-key">leetcode<i>:</i></span>
+                  <input className="t-input" type="text" required placeholder="your leetcode username" value={leetcodeUsername} onChange={e => setLeetcodeUsername(e.target.value)} />
+                </label>
+              )}
               <label className="t-field">
-                <span className="t-key">leetcode<i>:</i></span>
-                <input className="t-input" type="text" required placeholder="your leetcode username" value={leetcodeUsername} onChange={e => setLeetcodeUsername(e.target.value)} />
+                <span className="t-key">password<i>:</i></span>
+                <input className="t-input" type="password" required minLength={authMode === "signup" ? 8 : undefined} placeholder={authMode === "signup" ? "at least 8 characters" : "your password"} value={password} onChange={e => setPassword(e.target.value)} autoComplete={authMode === "signup" ? "new-password" : "current-password"} />
               </label>
               {authError && <p className="t-err"><AlertCircle size={14} /> {authError}</p>}
-              <button type="submit" className="t-btn">
-                open dashboard <ArrowRight size={16} />
+              <button type="submit" className="t-btn" disabled={authBusy}>
+                {authBusy ? "…" : authMode === "signup" ? "create account" : "open dashboard"} <ArrowRight size={16} />
               </button>
             </form>
           </div>

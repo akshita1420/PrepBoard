@@ -59,25 +59,28 @@ public class PushNotificationService {
         return vapidPublicKey;
     }
 
-    public void saveSubscription(String endpoint, String p256dh, String auth) {
+    public void saveSubscription(Long userId, String endpoint, String p256dh, String auth) {
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("subscription endpoint is required");
         }
 
-        pushSubscriptionRepository.findByEndpoint(endpoint)
-                .orElseGet(() -> pushSubscriptionRepository.save(
-                        PushSubscription.builder()
-                                .endpoint(endpoint)
-                                .p256dh(p256dh)
-                                .auth(auth)
-                                .build()
-                ));
+        // A browser belongs to whoever subscribed from it last.
+        PushSubscription subscription = pushSubscriptionRepository.findByEndpoint(endpoint)
+                .orElseGet(() -> PushSubscription.builder().endpoint(endpoint).build());
+        subscription.setP256dh(p256dh);
+        subscription.setAuth(auth);
+        subscription.setUserId(userId);
+        pushSubscriptionRepository.save(subscription);
     }
 
-    public void sendToAll(String title, String body) {
+    /** Pushes only to this user's own browsers. */
+    public void sendToUser(Long userId, String title, String body) {
+        send(pushSubscriptionRepository.findByUserId(userId), title, body);
+    }
+
+    private void send(List<PushSubscription> subscriptions, String title, String body) {
     if (pushService == null) return;
     String payload = "{\"title\":\"" + escapeJson(title) + "\",\"body\":\"" + escapeJson(body) + "\"}";
-    List<PushSubscription> subscriptions = pushSubscriptionRepository.findAll();
 
     for (PushSubscription subscription : subscriptions) {
         try {
