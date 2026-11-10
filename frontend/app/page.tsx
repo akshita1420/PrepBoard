@@ -21,6 +21,7 @@ import {
   BookOpen,
   Search,
   Car,
+  Laptop,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -174,7 +175,8 @@ function getGreeting(): string {
   return "Good evening";
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
+// Where the backend lives. Empty = same domain as the site (the VPS setup, where Caddy routes /api to the backend).
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -387,6 +389,14 @@ function shortHash(s: string): string {
   return (h >>> 0).toString(16).padStart(8, "0").slice(0, 7);
 }
 
+function relativeTime(iso: string, now: Date): string {
+  const mins = Math.round((now.getTime() - Date.parse(iso)) / 60000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`;
+  return `${Math.round(mins / 1440)} days ago`;
+}
+
 function relativeDay(dateKey: string, todayKey: string): string {
   const diff = Math.round((Date.parse(`${todayKey}T00:00:00Z`) - Date.parse(`${dateKey}T00:00:00Z`)) / 86400000);
   if (diff <= 0) return "today";
@@ -539,6 +549,10 @@ export default function Home() {
   const [notificationError, setNotificationError] = useState<string>("");
   const [notificationSentKey, setNotificationSentKey] = useState<string>("");
   const [desktopNudgeMsg, setDesktopNudgeMsg] = useState("");
+  // Desktop helper (shows the car on the user's own laptop)
+  const [agents, setAgents] = useState<{ id: number; name: string; lastSeenAt: string | null }[]>([]);
+  const [agentCode, setAgentCode] = useState<{ code: string; expiresAt: number } | null>(null);
+  const [helperOpen, setHelperOpen] = useState(false);
 
   // ── Session restore ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -638,7 +652,7 @@ export default function Home() {
   const loadDashboard = async (user: User, attempt = 0) => {
     let up = false;
     try {
-      up = (await fetch(`http://localhost:8080/api/v1/users/${user.id}`)).ok;
+      up = (await fetch(`${API_BASE}/api/v1/users/${user.id}`)).ok;
     } catch { /* not up yet */ }
     if (!up) {
       if (attempt < 36) setTimeout(() => loadDashboard(user, attempt + 1), 5000);
@@ -654,7 +668,7 @@ export default function Home() {
 
   const fetchLogs = async (username: string) => {
     try {
-      const res = await fetch(`http://localhost:8080/api/leetcode/logs/${username}?t=${Date.now()}`);
+      const res = await fetch(`${API_BASE}/api/leetcode/logs/${username}?t=${Date.now()}`);
       if (res.ok) setLogs(await res.json());
     } catch { /* backend may be offline */ }
   };
@@ -664,7 +678,7 @@ export default function Home() {
   const fetchQuestionMeta = async (username: string, attempt = 0) => {
     let retry = false;
     try {
-      const res = await fetch(`http://localhost:8080/api/leetcode/${username}/questions`);
+      const res = await fetch(`${API_BASE}/api/leetcode/${username}/questions`);
       if (res.ok) {
         const body: { pending: number; questions: QuestionDetails[] } = await res.json();
         setQuestionMeta(Object.fromEntries(body.questions.map((q) => [q.titleSlug, q])));
@@ -684,13 +698,14 @@ export default function Home() {
     fetchQuestionMeta(username);
     try {
       const [upcomingRes, historyRes, regRes] = await Promise.all([
-        fetch(`http://localhost:8080/api/leetcode/contests/upcoming`),
-        fetch(`http://localhost:8080/api/leetcode/${username}/contests`),
-        fetch(`http://localhost:8080/api/v1/users/${userId}/contests/registered`),
+        fetch(`${API_BASE}/api/leetcode/contests/upcoming`),
+        fetch(`${API_BASE}/api/leetcode/${username}/contests`),
+        fetch(`${API_BASE}/api/v1/users/${userId}/contests/registered`),
       ]);
       if (upcomingRes.ok) setContests(await upcomingRes.json());
       if (historyRes.ok) setContestHistory(await historyRes.json());
       if (regRes.ok) setRegisteredContests(await regRes.json());
+      fetchAgents(userId);
       if (!upcomingRes.ok || !historyRes.ok) throw new Error("retry");
     } catch {
       if (attempt < 8) setTimeout(() => loadInsights(username, userId, attempt + 1), 5000);
@@ -704,13 +719,13 @@ export default function Home() {
     setRegisteredContests((list) => isRegistered ? list.filter((s) => s !== contest.titleSlug) : [...list, contest.titleSlug]);
     if (!isRegistered) fireConfetti(rect.left + rect.width / 2, rect.top + rect.height / 2);
     try {
-      await fetch(`http://localhost:8080/api/v1/users/${currentUser.id}/contests/${contest.titleSlug}/registered`, { method: isRegistered ? "DELETE" : "PUT" });
+      await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/contests/${contest.titleSlug}/registered`, { method: isRegistered ? "DELETE" : "PUT" });
     } catch { /* backend may be offline */ }
   };
 
   const fetchStats = async (username: string) => {
     try {
-      const res = await fetch(`http://localhost:8080/api/leetcode/${username}?t=${Date.now()}`);
+      const res = await fetch(`${API_BASE}/api/leetcode/${username}?t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         const subs = data?.data?.matchedUser?.submitStats?.acSubmissionNum ?? [];
@@ -728,7 +743,7 @@ export default function Home() {
   // Live list of every accepted solve LeetCode exposes (full history if the backend has a LeetCode login, else the last 20).
   const fetchSubmissionHistory = async (username: string) => {
     try {
-      const res = await fetch(`http://localhost:8080/api/leetcode/${username}/history?t=${Date.now()}`);
+      const res = await fetch(`${API_BASE}/api/leetcode/${username}/history?t=${Date.now()}`);
       if (!res.ok) return;
       const history = await res.json();
       const solves: { title: string; titleSlug: string; difficulty?: string | null; timestamp: number | string }[] =
@@ -745,7 +760,7 @@ export default function Home() {
   // Saves new solves to the database so older days stay on the calendar, then refreshes the saved list.
   const syncInBackground = async (username: string) => {
     try {
-      const res = await fetch(`http://localhost:8080/api/leetcode/${username}/sync`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/api/leetcode/${username}/sync`, { method: "POST" });
       if (res.ok) {
         setLogs(await res.json());
         fetchQuestionMeta(username);
@@ -761,7 +776,7 @@ export default function Home() {
   // Picks up server-side changes to the saved user, such as whether LeetCode is connected.
   const refreshUser = async (id: number) => {
     try {
-      const res = await fetch(`http://localhost:8080/api/v1/users/${id}`);
+      const res = await fetch(`${API_BASE}/api/v1/users/${id}`);
       if (!res.ok) return;
       const user: User = await res.json();
       saveUser(user);
@@ -774,10 +789,11 @@ export default function Home() {
   const saveNudgeToBackend = async (change: { time?: string; desktop?: boolean }, id = currentUser?.id) => {
     if (!id) return null;
     try {
-      const res = await fetch(`http://localhost:8080/api/v1/users/${id}/nudge`, {
+      const res = await fetch(`${API_BASE}/api/v1/users/${id}/nudge`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(change),
+        // The server fires nudges in each user's own time zone, taken from their browser.
+        body: JSON.stringify({ ...change, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
       });
       if (!res.ok) return null;
       const user: User = await res.json();
@@ -788,13 +804,62 @@ export default function Home() {
     }
   };
 
+  const fetchAgents = async (userId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/users/${userId}/agents`);
+      if (res.ok) setAgents(await res.json());
+    } catch { /* backend may be offline */ }
+  };
+
+  // One-time code the helper installer asks for. Keeps checking until the laptop shows up as linked.
+  const getAgentCode = async () => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/agent/code`, { method: "POST" });
+      if (!res.ok) return;
+      const body: { code: string; expiresInMinutes: number } = await res.json();
+      setAgentCode({ code: body.code, expiresAt: Date.now() + body.expiresInMinutes * 60000 });
+      const userId = currentUser.id;
+      const before = agents.length;
+      let tries = 0;
+      const watch = async () => {
+        tries++;
+        try {
+          const r = await fetch(`${API_BASE}/api/v1/users/${userId}/agents`);
+          if (r.ok) {
+            const list = await r.json();
+            setAgents(list);
+            if (list.length > before) {
+              setAgentCode(null);
+              refreshUser(userId);
+              setDesktopNudgeMsg("// laptop linked. the car will come at your nudge time and at 9 pm.");
+              return;
+            }
+          }
+        } catch { /* keep waiting */ }
+        if (tries < 90) setTimeout(watch, 5000);
+      };
+      setTimeout(watch, 5000);
+    } catch { /* backend may be offline */ }
+  };
+
+  const unlinkAgent = async (deviceId: number) => {
+    if (!currentUser) return;
+    try {
+      await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/agents/${deviceId}`, { method: "DELETE" });
+      fetchAgents(currentUser.id);
+    } catch { /* backend may be offline */ }
+  };
+
   const previewDesktopNudge = async () => {
     if (!currentUser) return;
     setDesktopNudgeMsg("");
     try {
-      const res = await fetch(`http://localhost:8080/api/v1/users/${currentUser.id}/nudge/test`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/nudge/test`, { method: "POST" });
       const body = await res.json().catch(() => null);
-      setDesktopNudgeMsg(res.ok ? "// look at the top of your screen →" : body?.error ?? "Could not show the desktop car.");
+      setDesktopNudgeMsg(res.ok
+        ? body?.local ? "// look at the top of your screen →" : "// your laptop's helper shows it within a minute →"
+        : body?.error ?? "Could not show the desktop car.");
     } catch {
       setDesktopNudgeMsg("Cannot reach the backend. Is it running?");
     }
@@ -814,7 +879,7 @@ export default function Home() {
     setConnectStatus("checking");
     setConnectMessage("");
     try {
-      const res = await fetch(`http://localhost:8080/api/v1/users/${currentUser.id}/leetcode-session`, {
+      const res = await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/leetcode-session`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session: sessionInput, csrfToken: csrfInput }),
@@ -829,7 +894,7 @@ export default function Home() {
       setSessionInput("");
       setCsrfInput("");
       setConnectStatus("importing");
-      const sync = await fetch(`http://localhost:8080/api/leetcode/${currentUser.leetcodeUsername}/sync`, { method: "POST" });
+      const sync = await fetch(`${API_BASE}/api/leetcode/${currentUser.leetcodeUsername}/sync`, { method: "POST" });
       if (sync.ok) {
         const saved: LeetCodeLog[] = await sync.json();
         setLogs(saved);
@@ -849,7 +914,7 @@ export default function Home() {
   const handleDisconnectLeetCode = async () => {
     if (!currentUser) return;
     try {
-      const res = await fetch(`http://localhost:8080/api/v1/users/${currentUser.id}/leetcode-session`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/api/v1/users/${currentUser.id}/leetcode-session`, { method: "DELETE" });
       if (res.ok) {
         saveUser(await res.json());
         setConnectStatus("idle");
@@ -863,7 +928,7 @@ export default function Home() {
     setSyncing(true);
     setSyncMessage("");
     try {
-      const res = await fetch(`http://localhost:8080/api/leetcode/${currentUser.leetcodeUsername}/sync`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/api/leetcode/${currentUser.leetcodeUsername}/sync`, { method: "POST" });
       if (res.ok) {
         await fetchLogs(currentUser.leetcodeUsername);
         await fetchSubmissionHistory(currentUser.leetcodeUsername);
@@ -882,7 +947,7 @@ export default function Home() {
     setAuthError("");
     if (!email || !leetcodeUsername) { setAuthError("Please fill in all fields."); return; }
     try {
-      const res = await fetch("http://localhost:8080/api/v1/users", {
+      const res = await fetch(`${API_BASE}/api/v1/users`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name || leetcodeUsername, email, leetcodeUsername }),
@@ -1679,6 +1744,16 @@ export default function Home() {
         .nudge-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--mute); transition: transform .25s cubic-bezier(.2,.8,.2,1), background .25s; }
         .nudge-switch.on { background: rgba(242,180,60,.2); border-color: rgba(242,180,60,.6); }
         .nudge-switch.on::after { transform: translateX(13px); background: var(--amber); box-shadow: 0 0 8px rgba(242,180,60,.6); }
+        .helper-box { margin: 6px 0 10px; padding: 12px; border: 1px dashed var(--line); border-radius: 6px; animation: pop .18s ease-out; }
+        .helper-copy { font-size: 11.5px; color: var(--mute); line-height: 1.55; }
+        .helper-steps { font-size: 12px; color: var(--dim); line-height: 1.9; padding-left: 18px; margin: 8px 0; }
+        .helper-steps a { color: var(--amber); }
+        .helper-steps b { color: var(--text); font-weight: 600; }
+        .helper-code { font-size: 15px; letter-spacing: 3px; color: var(--amber) !important; background: rgba(242,180,60,.08); border: 1px solid rgba(242,180,60,.35); border-radius: 4px; padding: 1px 8px; user-select: all; }
+        .helper-device { display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 6px 0; border-top: 1px dashed var(--line-soft); }
+        .helper-device .cm { margin-left: auto; }
+        .helper-unlink { background: transparent; border: none; color: var(--mute); font-size: 11px; padding: 0; }
+        .helper-unlink:hover { color: var(--red); }
         .nudge-car-msg { font-size: 11.5px; color: var(--mute); margin-top: 6px; line-height: 1.5; }
         .nudge-error { margin-top: 8px; color: #f3a29a; font-size: 11.5px; line-height: 1.5; }
         .edit-sched-btn { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: auto; background: transparent; border: 1px solid var(--line); border-radius: 5px; padding: 9px 12px; color: var(--dim); font-size: 12.5px; transition: color .2s, border-color .2s; }
@@ -2354,6 +2429,35 @@ export default function Home() {
                       </span>
                     </div>
                     {desktopNudgeMsg && <div className="nudge-car-msg">{desktopNudgeMsg}</div>}
+                    <div className="nudge-row">
+                      <div className="nudge-row-label"><Laptop size={13} /> desktop helper</div>
+                      <button type="button" className="nudge-enable" onClick={() => setHelperOpen((o) => !o)}>
+                        {agents.length > 0 ? `${agents.length} linked` : "set up"}
+                      </button>
+                    </div>
+                    {helperOpen && (
+                      <div className="helper-box">
+                        <p className="helper-copy">{"// "}shows the car on your windows laptop even when this site is closed. install once, then it&apos;s automatic.</p>
+                        <ol className="helper-steps">
+                          <li><a href={`${API_BASE}/api/agent/download`}>download the helper</a>, unzip it</li>
+                          <li>double-click <b>install.cmd</b></li>
+                          <li>
+                            paste this code:{" "}
+                            {agentCode && agentCode.expiresAt > now.getTime()
+                              ? <b className="helper-code">{agentCode.code}</b>
+                              : <button type="button" className="nudge-enable" onClick={getAgentCode}>get code</button>}
+                          </li>
+                        </ol>
+                        {agentCode && <p className="helper-copy">{"// "}code works for 15 minutes · waiting for your laptop…</p>}
+                        {agents.map((a) => (
+                          <div key={a.id} className="helper-device">
+                            <span><span className="ok">●</span> {a.name.toLowerCase()}</span>
+                            <span className="cm">{a.lastSeenAt ? `seen ${relativeTime(a.lastSeenAt, now)}` : "never seen"}</span>
+                            <button type="button" className="helper-unlink" onClick={() => unlinkAgent(a.id)} aria-label={`Unlink ${a.name}`}>unlink</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {notificationError && <div className="nudge-error">{notificationError}</div>}
 
                     <button className="edit-sched-btn" onClick={() => { setNudgeDraft(nudge); setEditingSchedule(e => !e); }}>

@@ -14,7 +14,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/leetcode")
-@CrossOrigin(origins = "http://localhost:3000")
 public class LeetCodeController {
 
     private final LeetCodeService leetCodeService;

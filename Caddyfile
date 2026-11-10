@@ -1,0 +1,10 @@
+# One domain for everything: /api/* goes to the Spring backend, the rest to the Next.js site.
+{$DOMAIN} {
+	encode gzip
+	handle /api/* {
+		reverse_proxy backend:8080
+	}
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

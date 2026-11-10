@@ -2,6 +2,7 @@
 backend/application-local.properties
 .env
 .env.*
+!.env.example
 
 # Dependencies and builds
 node_modules/

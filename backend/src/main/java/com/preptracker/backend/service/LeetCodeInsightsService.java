@@ -43,6 +43,18 @@ public class LeetCodeInsightsService {
     private final DesktopNudgeService desktopNudgeService;
     private final PushNotificationService pushNotificationService;
 
+    private com.preptracker.backend.repository.AgentDeviceRepository agentDeviceRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setAgentDeviceRepository(com.preptracker.backend.repository.AgentDeviceRepository agentDeviceRepository) {
+        this.agentDeviceRepository = agentDeviceRepository;
+    }
+
+    /** Whether the user marked this contest as registered. */
+    public boolean isRegistered(Long userId, String contestSlug) {
+        return registrationRepository.existsByUserIdAndContestSlug(userId, contestSlug);
+    }
+
     private final ExecutorService metaFiller = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "question-meta-filler");
         t.setDaemon(true);
@@ -309,7 +321,9 @@ public class LeetCodeInsightsService {
                 String when = lead >= 86_400 ? "starts in 24 hours" : "starts in 2 hours";
                 for (User user : userRepository.findAll()) {
                     if (registrationRepository.existsByUserIdAndContestSlug(user.getId(), slug)) continue;
-                    if (Boolean.TRUE.equals(user.getDesktopNudge())) {
+                    // Users with the desktop helper get this through /api/agent/poll instead.
+                    boolean hasHelper = agentDeviceRepository != null && agentDeviceRepository.existsByUserId(user.getId());
+                    if (Boolean.TRUE.equals(user.getDesktopNudge()) && desktopNudgeService.isSupported() && !hasHelper) {
                         desktopNudgeService.show("REGISTER FOR " + title, title + " " + when);
                     }
                 }

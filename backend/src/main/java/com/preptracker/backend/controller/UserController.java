@@ -4,6 +4,7 @@ import com.preptracker.backend.model.ContestRegistration;
 import com.preptracker.backend.model.User;
 import com.preptracker.backend.repository.ContestRegistrationRepository;
 import com.preptracker.backend.repository.UserRepository;
+import com.preptracker.backend.service.AgentService;
 import com.preptracker.backend.service.LeetCodeService;
 import com.preptracker.backend.service.NotificationSchedulerService;
 import org.springframework.http.HttpStatus;
@@ -15,21 +16,43 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/users")
-@CrossOrigin(origins = "http://localhost:3000")
 public class UserController {
 
     private final UserRepository userRepository;
     private final LeetCodeService leetCodeService;
     private final NotificationSchedulerService notificationSchedulerService;
     private final ContestRegistrationRepository registrationRepository;
+    private final AgentService agentService;
 
     public UserController(UserRepository userRepository, LeetCodeService leetCodeService,
                           NotificationSchedulerService notificationSchedulerService,
-                          ContestRegistrationRepository registrationRepository) {
+                          ContestRegistrationRepository registrationRepository,
+                          AgentService agentService) {
         this.userRepository = userRepository;
         this.leetCodeService = leetCodeService;
         this.notificationSchedulerService = notificationSchedulerService;
         this.registrationRepository = registrationRepository;
+        this.agentService = agentService;
+    }
+
+    // 10. One-time code to link the desktop helper on a laptop
+    @PostMapping("/{id}/agent/code")
+    public ResponseEntity<?> agentLinkCode(@PathVariable Long id) {
+        return userRepository.findById(id)
+                .<ResponseEntity<?>>map(user -> ResponseEntity.ok(agentService.createLinkCode(user)))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    // 11. Laptops with the desktop helper linked to this user
+    @GetMapping("/{id}/agents")
+    public List<Map<String, Object>> agents(@PathVariable Long id) {
+        return agentService.devicesFor(id);
+    }
+
+    @DeleteMapping("/{id}/agents/{deviceId}")
+    public ResponseEntity<?> unlinkAgent(@PathVariable Long id, @PathVariable Long deviceId) {
+        agentService.unlink(id, deviceId);
+        return ResponseEntity.ok(Map.of("unlinked", true));
     }
 
     // 1. Create or login existing user by email or username
@@ -90,7 +113,7 @@ public class UserController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    public record NudgeRequest(String time, Boolean desktop) {}
+    public record NudgeRequest(String time, Boolean desktop, String timezone) {}
 
     // 6. Save the daily nudge time and whether to show the desktop car banner
     @PutMapping("/{id}/nudge")
@@ -105,6 +128,13 @@ public class UserController {
                         }
                     }
                     if (request.desktop() != null) user.setDesktopNudge(request.desktop());
+                    if (request.timezone() != null && !request.timezone().isBlank()) {
+                        try {
+                            user.setTimezone(java.time.ZoneId.of(request.timezone()).getId());
+                        } catch (Exception ignored) {
+                            // keep the old zone if the browser sent something unknown
+                        }
+                    }
                     return ResponseEntity.ok(userRepository.save(user));
                 })
                 .orElse(ResponseEntity.notFound().build());
@@ -115,10 +145,14 @@ public class UserController {
     public ResponseEntity<?> testNudge(@PathVariable Long id) {
         return userRepository.findById(id)
                 .<ResponseEntity<?>>map(user -> {
-                    boolean shown = notificationSchedulerService.showDesktopNudge(user);
-                    return shown
-                            ? ResponseEntity.ok(Map.of("shown", true))
-                            : ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("shown", false, "error", "The desktop car only works when the backend runs on your Windows PC."));
+                    // Helpers show it on their next check (within a minute); the backend's own PC shows it now.
+                    int helpers = agentService.requestPreview(user.getId());
+                    boolean local = notificationSchedulerService.showsLocally(user) && notificationSchedulerService.showDesktopNudge(user);
+                    if (helpers == 0 && !local) {
+                        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("shown", false,
+                                "error", "Install the desktop helper on your laptop first, then press preview again."));
+                    }
+                    return ResponseEntity.ok(Map.of("shown", true, "helpers", helpers, "local", local));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }

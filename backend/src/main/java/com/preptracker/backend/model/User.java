@@ -34,8 +34,15 @@ public class User {
     @Builder.Default
     private String notificationTime = "20:00";
 
-    // Show the pixel car banner on this PC's desktop at notificationTime.
+    // Show the pixel car banner (via the desktop helper, or on this PC) at notificationTime and 9 pm.
     private Boolean desktopNudge;
+
+    // One-time code for linking a desktop helper; short-lived.
+    @JsonIgnore
+    private String agentLinkCode;
+
+    @JsonIgnore
+    private java.time.Instant agentLinkCodeExpiresAt;
 
     // Set once the full LeetCode submission history has been imported; later syncs only fetch newer pages.
     @JsonIgnore

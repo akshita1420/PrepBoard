@@ -15,4 +15,6 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findFirstByLeetcodeUsername(String leetcodeUsername);
 
     List<User> findByLeetcodeUsernameIgnoreCase(String leetcodeUsername);
+
+    Optional<User> findFirstByAgentLinkCode(String agentLinkCode);
 }
