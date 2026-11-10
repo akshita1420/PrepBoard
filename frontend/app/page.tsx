@@ -131,13 +131,18 @@ function getLocalDateKey(d: Date): string {
 
 const DEFAULT_CHART_TIMEZONE = "UTC";
 
+// Creating an Intl.DateTimeFormat is slow, and this runs for every solve on every render, so reuse one per zone.
+const dateKeyFormatters = new Map<string, Intl.DateTimeFormat>();
+
 function getDateKeyInTimeZone(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
+  if (Number.isNaN(date.getTime())) return "";
+  if (timeZone === "UTC") return date.toISOString().slice(0, 10);
+  let formatter = dateKeyFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+    dateKeyFormatters.set(timeZone, formatter);
+  }
+  const parts = formatter.formatToParts(date);
 
   const year = parts.find((p) => p.type === "year")?.value;
   const month = parts.find((p) => p.type === "month")?.value;
@@ -352,6 +357,26 @@ function CountUp({ value, duration = 900 }: { value: number; duration?: number }
   return <>{shown}</>;
 }
 
+// Live contest countdown. Ticks on its own so the rest of the dashboard doesn't redraw every second.
+function Countdown({ startTime }: { startTime: number }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const secs = Math.max(0, Math.floor(startTime - nowMs / 1000));
+  const dd = Math.floor(secs / 86400), hh = Math.floor((secs % 86400) / 3600), mm = Math.floor((secs % 3600) / 60), ss = secs % 60;
+  return (
+    <div className="countdown" aria-label="Time until the contest starts">
+      {secs === 0 ? <span className="live">● live now</span> : (
+        <>
+          <span><b>{dd}</b>d</span><span><b>{String(hh).padStart(2, "0")}</b>h</span><span><b>{String(mm).padStart(2, "0")}</b>m</span><span><b>{String(ss).padStart(2, "0")}</b>s</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Short, stable git-style hash for a solved question (purely decorative).
 function shortHash(s: string): string {
   let h = 2166136261;
@@ -467,6 +492,7 @@ export default function Home() {
   const [heatHover, setHeatHover] = useState<{ key: string; x: number; y: number; below: boolean } | null>(null);
   const heatWrapRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLElement>(null);
+  const spotlightFrame = useRef(0);
 
   // Each "file" opens at the top, like switching editor tabs.
   useEffect(() => {
@@ -548,7 +574,8 @@ export default function Home() {
   }, [nudge]);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
+    // The dashboard only needs minute-level time; second-by-second countdowns tick in their own <Countdown>.
+    const timer = setInterval(() => setNow(new Date()), 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -1182,12 +1209,19 @@ export default function Home() {
   };
 
   // Soft spotlight that follows the cursor across panels.
+  // At most once per frame, so fast mouse moves don't queue up layout work.
   const handleSpotlight = (e: React.MouseEvent<HTMLElement>) => {
-    const panel = (e.target as HTMLElement).closest<HTMLElement>(".panel");
-    if (!panel) return;
-    const r = panel.getBoundingClientRect();
-    panel.style.setProperty("--mx", `${e.clientX - r.left}px`);
-    panel.style.setProperty("--my", `${e.clientY - r.top}px`);
+    const target = e.target as HTMLElement;
+    const x = e.clientX, y = e.clientY;
+    if (spotlightFrame.current) return;
+    spotlightFrame.current = requestAnimationFrame(() => {
+      spotlightFrame.current = 0;
+      const panel = target.closest<HTMLElement>(".panel");
+      if (!panel) return;
+      const r = panel.getBoundingClientRect();
+      panel.style.setProperty("--mx", `${x - r.left}px`);
+      panel.style.setProperty("--my", `${y - r.top}px`);
+    });
   };
 
   const showHeatTip = (e: React.MouseEvent<HTMLElement> | React.FocusEvent<HTMLElement>, key: string) => {
@@ -1206,9 +1240,6 @@ export default function Home() {
       <div className="contest-grid reveal" style={d(1)}>
         {[nextWeekly, nextBiweekly].filter((c): c is UpcomingContest => !!c).map((c) => {
           const registered = registeredContests.includes(c.titleSlug);
-          const secs = Math.max(0, Math.floor(c.startTime - now.getTime() / 1000));
-          const live = secs === 0;
-          const dd = Math.floor(secs / 86400), hh = Math.floor((secs % 86400) / 3600), mm = Math.floor((secs % 3600) / 60), ss = secs % 60;
           const start = new Date(c.startTime * 1000);
           return (
             <div key={c.titleSlug} className={`panel contest-card${registered ? " registered" : ""}`}>
@@ -1220,13 +1251,7 @@ export default function Home() {
               <p className="contest-when">
                 {start.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toLowerCase()} · {start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).toLowerCase()}
               </p>
-              <div className="countdown" aria-label="Time until the contest starts">
-                {live ? <span className="live">● live now</span> : (
-                  <>
-                    <span><b>{dd}</b>d</span><span><b>{String(hh).padStart(2, "0")}</b>h</span><span><b>{String(mm).padStart(2, "0")}</b>m</span><span><b>{String(ss).padStart(2, "0")}</b>s</span>
-                  </>
-                )}
-              </div>
+              <Countdown startTime={c.startTime} />
               <div className="contest-actions">
                 <a className="contest-link" href={c.url} target="_blank" rel="noreferrer">register on leetcode ↗</a>
                 <button type="button" className={`contest-check${registered ? " on" : ""}`} onClick={(e) => toggleRegistered(c, e)}>
@@ -1429,7 +1454,7 @@ export default function Home() {
         .ok { color: var(--green); } .bad { color: var(--red); } .flag { color: var(--purple); }
 
         /* ── Sidebar ───────────────────────────────────────── */
-        .sidebar { width: 264px; min-width: 264px; display: flex; flex-direction: column; border-right: 1px solid var(--line-soft); background: rgba(14,14,12,0.86); backdrop-filter: blur(10px); }
+        .sidebar { width: 264px; min-width: 264px; display: flex; flex-direction: column; border-right: 1px solid var(--line-soft); background: #0e0e0c; }
         .logo { display: flex; align-items: center; gap: 10px; padding: 20px 18px 18px; border-bottom: 1px solid var(--line-soft); }
         .logo-box { font-weight: 800; font-size: 13px; color: #0c0c0b; background: var(--amber); padding: 3px 6px; border-radius: 4px; box-shadow: 0 0 18px rgba(242,180,60,0.35); }
         .logo-text { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
@@ -1468,7 +1493,7 @@ export default function Home() {
 
         /* ── Main ──────────────────────────────────────────── */
         .main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-        .topbar { height: 50px; min-height: 50px; display: flex; align-items: center; gap: 16px; padding: 0 22px 0 28px; border-bottom: 1px solid var(--line-soft); background: rgba(12,12,11,0.6); backdrop-filter: blur(10px); }
+        .topbar { height: 50px; min-height: 50px; display: flex; align-items: center; gap: 16px; padding: 0 22px 0 28px; border-bottom: 1px solid var(--line-soft); background: #0d0d0c; }
         .sync-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mute); flex: 1; min-width: 0; white-space: nowrap; }
         .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 0 rgba(242,180,60,.6); animation: pulse 2.4s infinite; }
         .sync-line .arrow { color: var(--mute); }
