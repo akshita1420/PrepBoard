@@ -44,14 +44,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Pull and restart on the VPS
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          # Secrets pasted on Windows can carry \r line endings or stray spaces; clean them up.
+          host=$(printf '%s' "$VPS_HOST" | tr -d '\r[:space:]')
+          user=$(printf '%s' "$VPS_USER" | tr -d '\r[:space:]')
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -z "$host" ] || [ -z "$user" ]; then echo "::error::VPS_HOST or VPS_USER secret is empty"; exit 1; fi
+          if ! ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null; then
+            echo "::error::VPS_SSH_KEY isn't a readable private key. Paste the whole file, including the BEGIN and END lines."
+            exit 1
+          fi
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "$user@$host" '
             set -e
             cd /opt/prepboard
             git pull --ff-only
             docker compose up -d --build
             docker image prune -f --filter label=com.docker.compose.project=prepboard
+            docker compose ps --format "{{.Service}}: {{.Status}}"
+          '
