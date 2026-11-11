@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -19,6 +19,20 @@ export const metadata: Metadata = {
   title: "prepboard",
   description: "Your personal interview preparation tracker. Track LeetCode streaks, weekly progress, and daily targets.",
   manifest: "/manifest.webmanifest",
+  icons: {
+    icon: "/icon-192.png",
+    apple: "/apple-touch-icon.png",
+  },
+  // "Add to Home Screen" on iPhone opens it full screen like an app (needed for push on iOS).
+  appleWebApp: {
+    capable: true,
+    title: "prepboard",
+    statusBarStyle: "black-translucent",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0c0c0b",
 };
 
 export default function RootLayout({

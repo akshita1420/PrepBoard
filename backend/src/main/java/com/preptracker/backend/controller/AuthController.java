@@ -31,6 +31,18 @@ public class AuthController {
         }
     }
 
+    public record VerifyRequest(String email, String code) {}
+
+    // Step 2 of sign-up: the 6-digit code from the email creates the account.
+    @PostMapping("/verify")
+    public ResponseEntity<?> verify(@RequestBody VerifyRequest r) {
+        try {
+            return ResponseEntity.ok(authService.verify(r.email(), r.code()));
+        } catch (AuthService.AuthException e) {
+            return ResponseEntity.status(e.status).body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest r) {
         try {

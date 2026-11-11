@@ -13,7 +13,7 @@ self.addEventListener('push', (event) => {
     payload = event.data ? event.data.json() : {};
   } catch (error) {
     payload = {
-      title: 'PrepTracker',
+      title: 'prepboard',
       body: event.data
         ? event.data.text()
         : 'Keep your streak alive.',
@@ -23,6 +23,8 @@ self.addEventListener('push', (event) => {
   const options = {
     body: payload.body || 'Keep your streak alive.',
     tag: 'prep-tracker-nudge',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
     vibrate: [100, 50, 100],
     data: {
       url: '/',
@@ -31,7 +33,7 @@ self.addEventListener('push', (event) => {
 
   event.waitUntil(
     self.registration.showNotification(
-      payload.title || 'PrepTracker',
+      payload.title || 'prepboard',
       options
     )
   );

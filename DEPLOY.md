@@ -78,6 +78,21 @@ download the helper, double-click `install.cmd`, paste the code. From then on th
 nudge time and at 9 pm (their own time zone) and before contests, with the website closed.
 Their laptop just needs to be on, signed in to Windows, and online.
 
+## Email (needed for sign-up)
+
+Sign-up emails a 6-digit code, so the server needs a mailbox to send from. With Gmail:
+
+1. Turn on 2-Step Verification for the Gmail account.
+2. Create an **App Password**: https://myaccount.google.com/apppasswords (name it "prepboard").
+3. On the VPS, edit `/opt/prepboard/.env`:
+   ```
+   MAIL_USERNAME=youraddress@gmail.com
+   MAIL_PASSWORD=the 16-letter app password (no spaces)
+   ```
+4. `cd /opt/prepboard && docker compose up -d`
+
+Until this is set, codes are written to the backend log instead (`docker compose logs backend | grep "Sign-up code"`).
+
 ## Sharing with friends
 
 Send them `https://<your domain>`. Each person clicks **sign up** (name, email, LeetCode username, password).

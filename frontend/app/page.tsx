@@ -22,6 +22,8 @@ import {
   Search,
   Car,
   Laptop,
+  Settings,
+  ExternalLink,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -69,7 +71,69 @@ interface LeetCodeStats {
   submissionCalendar?: string;
 }
 
-type ViewId = "Overview" | "Problems" | "Calendar" | "Contests";
+type ViewId = "Overview" | "Problems" | "Calendar" | "Contests" | "Profiles";
+
+interface ProfileStats {
+  platform: string;
+  handle: string;
+  name: string;
+  avatar?: string | null;
+  profileUrl: string;
+  solved: number;
+  breakdown: { label: string; count: number }[];
+  rating?: number | null;
+  rank?: string | null;
+  extra?: Record<string, string | number>;
+}
+
+// Coding sites on the profiles page. "ready: false" = the site has no public data to read yet.
+const PROFILE_SITES: { id: string; name: string; prefix: string; mark: string; color: string; ready: boolean }[] = [
+  { id: "leetcode", name: "LeetCode", prefix: "leetcode.com/u/", mark: "LC", color: "#f2a33a", ready: true },
+  { id: "codeforces", name: "Codeforces", prefix: "codeforces.com/profile/", mark: "CF", color: "#4f8fd6", ready: true },
+  { id: "geeksforgeeks", name: "GeeksforGeeks", prefix: "geeksforgeeks.org/user/", mark: "GfG", color: "#3aa35b", ready: true },
+  { id: "codechef", name: "CodeChef", prefix: "codechef.com/users/", mark: "CC", color: "#b5835a", ready: true },
+  { id: "github", name: "GitHub", prefix: "github.com/", mark: "GH", color: "#c9ccd1", ready: true },
+  { id: "hackerrank", name: "HackerRank", prefix: "hackerrank.com/profile/", mark: "HR", color: "#2ec866", ready: false },
+  { id: "interviewbit", name: "InterviewBit", prefix: "interviewbit.com/profile/", mark: "IB", color: "#4d8fcc", ready: false },
+  { id: "code360", name: "Code360", prefix: "naukri.com/code360/profile/", mark: "360", color: "#f37a3b", ready: false },
+];
+
+const DIFF_COLORS: Record<string, string> = { easy: "#8fd47e", medium: "#f2b43c", hard: "#f0766b", unrated: "#5f5c55" };
+
+// Donut chart of a breakdown (easy/medium/hard…), drawn segment by segment with a 2px gap.
+function Donut({ segments, total, size = 132, label = "solved" }: { segments: { label: string; count: number }[]; total: number; size?: number; label?: string }) {
+  const r = size / 2 - 10;
+  const c = 2 * Math.PI * r;
+  const sum = segments.reduce((s, x) => s + x.count, 0) || 1;
+  let offset = 0;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="donut" role="img"
+      aria-label={`${total} ${label}: ${segments.map((s) => `${s.count} ${s.label}`).join(", ")}`}>
+      <circle cx={size / 2} cy={size / 2} r={r} className="donut-track" />
+      {segments.filter((s) => s.count > 0).map((s, i) => {
+        const len = (s.count / sum) * c;
+        const dash = Math.max(0, len - 2);
+        const el = (
+          <circle
+            key={s.label}
+            cx={size / 2} cy={size / 2} r={r}
+            className="donut-seg"
+            stroke={DIFF_COLORS[s.label] ?? "#8d897f"}
+            strokeDasharray={`${dash} ${c - dash}`}
+            strokeDashoffset={-offset}
+            style={{ "--len": dash, "--d": i } as React.CSSProperties}
+          >
+            <title>{`${s.label}: ${s.count}`}</title>
+          </circle>
+        );
+        offset += len;
+        return el;
+      })}
+      <text x="50%" y="48%" textAnchor="middle" className="donut-total">{total.toLocaleString()}</text>
+      <text x="50%" y="63%" textAnchor="middle" className="donut-label">{label}</text>
+    </svg>
+  );
+}
 
 interface QuestionDetails {
   titleSlug: string;
@@ -487,6 +551,8 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [password, setPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const [signupCode, setSignupCode] = useState("");
 
   // Data
   const [logs, setLogs] = useState<LeetCodeLog[]>([]);
@@ -507,6 +573,15 @@ export default function Home() {
   const [contestHistory, setContestHistory] = useState<ContestHistory | null>(null);
   const [registeredContests, setRegisteredContests] = useState<string[]>([]);
   const [ratingHover, setRatingHover] = useState<number | null>(null);
+
+  // Connected coding profiles
+  const [profiles, setProfiles] = useState<ProfileStats[]>([]);
+  const [profilesLoading, setProfilesLoading] = useState(false);
+  const [connectSite, setConnectSite] = useState<string | null>(null);
+  const [handleInput, setHandleInput] = useState("");
+  const [lookupResult, setLookupResult] = useState<ProfileStats | null>(null);
+  const [lookupState, setLookupState] = useState<"idle" | "searching" | "error" | "connecting">("idle");
+  const [lookupError, setLookupError] = useState("");
   const [hoveredDayIndex, setHoveredDayIndex] = useState<number | null>(null);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<string | null>(null);
 
@@ -525,6 +600,10 @@ export default function Home() {
   // Each "file" opens at the top, like switching editor tabs.
   useEffect(() => {
     contentRef.current?.scrollTo({ top: 0 });
+    if (activeNav === "Profiles") {
+      const me = JSON.parse(localStorage.getItem("preptracker_user") || "null");
+      if (me) fetchProfiles(me.id);
+    }
   }, [activeNav]);
 
   // Connect LeetCode (full history import)
@@ -735,6 +814,90 @@ export default function Home() {
     } catch {
       if (attempt < 8) setTimeout(() => loadInsights(username, userId, attempt + 1), 5000);
     }
+  };
+
+  const fetchProfiles = async (userId: number, refresh = false) => {
+    setProfilesLoading(true);
+    try {
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${userId}/profiles${refresh ? "?refresh=true" : ""}`);
+      if (res.ok) {
+        const body: { profiles: ProfileStats[] } = await res.json();
+        setProfiles(body.profiles);
+        // Your LeetCode account is connected automatically.
+        const me = currentUser ?? JSON.parse(localStorage.getItem("preptracker_user") || "null");
+        if (!refresh && me && !body.profiles.some((p) => p.platform === "leetcode")) {
+          const r = await apiFetch(`${API_BASE}/api/v1/users/${userId}/profiles`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ platform: "leetcode", handle: me.leetcodeUsername }),
+          });
+          if (r.ok) {
+            const lc: ProfileStats = await r.json();
+            setProfiles((list) => [lc, ...list]);
+          }
+        }
+      }
+    } catch { /* backend may be offline */ }
+    finally { setProfilesLoading(false); }
+  };
+
+  const startConnect = (siteId: string) => {
+    setConnectSite(siteId);
+    setHandleInput("");
+    setLookupResult(null);
+    setLookupState("idle");
+    setLookupError("");
+  };
+
+  // "Is this you?" preview before connecting.
+  const lookupProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !connectSite || !handleInput.trim()) return;
+    setLookupState("searching");
+    setLookupError("");
+    setLookupResult(null);
+    try {
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/profiles/lookup?platform=${connectSite}&handle=${encodeURIComponent(handleInput.trim())}`);
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setLookupState("error");
+        setLookupError(body?.error ?? "Couldn't find that profile.");
+        return;
+      }
+      setLookupResult(body);
+      setLookupState("idle");
+    } catch {
+      setLookupState("error");
+      setLookupError("Cannot reach the server.");
+    }
+  };
+
+  const confirmConnect = async () => {
+    if (!currentUser || !lookupResult) return;
+    setLookupState("connecting");
+    try {
+      const res = await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/profiles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: lookupResult.platform, handle: lookupResult.handle }),
+      });
+      if (res.ok) {
+        const saved: ProfileStats = await res.json();
+        setProfiles((list) => [...list.filter((p) => p.platform !== saved.platform), saved]
+          .sort((a, b) => PROFILE_SITES.findIndex((s) => s.id === a.platform) - PROFILE_SITES.findIndex((s) => s.id === b.platform)));
+        setConnectSite(null);
+        setLookupResult(null);
+      }
+    } catch { /* backend may be offline */ }
+    finally { setLookupState("idle"); }
+  };
+
+  const disconnectProfile = async (platform: string) => {
+    if (!currentUser) return;
+    try {
+      await apiFetch(`${API_BASE}/api/v1/users/${currentUser.id}/profiles/${platform}`, { method: "DELETE" });
+      setProfiles((list) => list.filter((p) => p.platform !== platform));
+    } catch { /* backend may be offline */ }
   };
 
   const toggleRegistered = async (contest: UpcomingContest, e: React.MouseEvent<HTMLButtonElement>) => {
@@ -984,18 +1147,56 @@ export default function Home() {
         setAuthError(body?.error ?? "Couldn't sign you in. Check your details.");
         return;
       }
-      const user: User = body.user;
-      localStorage.setItem(TOKEN_KEY, body.token);
-      localStorage.setItem("preptracker_user", JSON.stringify(user));
-      setPassword("");
-      setCurrentUser(user);
-      loadDashboard(user);
-      // New browsers save the nudge time and time zone on the account straight away.
-      if (signingUp) saveNudgeToBackend({ time: nudge.time }, user.id);
+      // Sign-up: a 6-digit code was emailed; the account is created once it's entered.
+      if (body?.pending) {
+        setPendingEmail(body.email);
+        setSignupCode("");
+        return;
+      }
+      finishSignIn(body);
     } catch {
       setAuthError("Cannot connect to the server. Try again in a moment.");
     } finally {
       setAuthBusy(false);
+    }
+  };
+
+  const handleVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingEmail) return;
+    setAuthError("");
+    setAuthBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: pendingEmail, code: signupCode }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setAuthError(body?.error ?? "That code didn't work.");
+        return;
+      }
+      setPendingEmail(null);
+      finishSignIn(body, true);
+    } catch {
+      setAuthError("Cannot connect to the server. Try again in a moment.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const finishSignIn = (body: { token: string; user: User }, isNewAccount = false) => {
+    const user: User = body.user;
+    localStorage.setItem(TOKEN_KEY, body.token);
+    localStorage.setItem("preptracker_user", JSON.stringify(user));
+    setPassword("");
+    setCurrentUser(user);
+    loadDashboard(user);
+    if (isNewAccount) {
+      // New accounts save the nudge time and time zone straight away, and get offered the profiles page.
+      saveNudgeToBackend({ time: nudge.time }, user.id);
+      setActiveNav("Profiles");
     }
   };
 
@@ -1183,6 +1384,7 @@ export default function Home() {
     { id: "Problems", file: "problems.tsx" },
     { id: "Calendar", file: "calendar.tsx" },
     { id: "Contests", file: "contests.tsx" },
+    { id: "Profiles", file: "profiles.tsx" },
   ];
 
   // Every solved question, newest day first.
@@ -1499,6 +1701,8 @@ export default function Home() {
           .t-tab { flex: 1; background: transparent; border: 1px solid #262520; border-radius: 6px; color: #8d897f; padding: 9px; font-size: 13px; transition: color .2s, border-color .2s, background .2s; }
           .t-tab.on { color: #f2b43c; border-color: rgba(242,180,60,.5); background: rgba(242,180,60,.06); }
           .t-btn:disabled { opacity: .7; cursor: progress; }
+          .t-code { letter-spacing: 8px; font-size: 18px; }
+          .t-link { background: none; border: none; padding: 0; color: #f2b43c; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
           .t-btn:hover { background: #f6c25a; box-shadow: 0 10px 30px rgba(242,180,60,0.25); transform: translateY(-1px); }
           .t-caret { display: inline-block; width: 8px; height: 16px; background: #f2b43c; vertical-align: -2px; margin-left: 4px; animation: blink 1.05s steps(1) infinite; }
           @keyframes blink { 50% { opacity: 0; } }
@@ -1519,6 +1723,36 @@ export default function Home() {
             </div>
             <p className="t-cm">{"// "}small reps compound. show up, then look back.</p>
             <p className="t-prompt"><span className="a">➜</span> <span className="p">~/prepboard</span> <span className="s">$</span> ./start-session<span className="t-caret" /></p>
+            {pendingEmail ? (
+              <form onSubmit={handleVerifyCode}>
+                <p className="t-cm">{"// "}we emailed a 6-digit code to <span style={{ color: "#ebe8e1" }}>{pendingEmail}</span>. it works for 10 minutes.</p>
+                <label className="t-field" style={{ marginTop: 14 }}>
+                  <span className="t-key">code<i>:</i></span>
+                  <input
+                    className="t-input t-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    required
+                    placeholder="123456"
+                    value={signupCode}
+                    onChange={e => setSignupCode(e.target.value.replace(/\D/g, ""))}
+                    autoFocus
+                  />
+                </label>
+                {authError && <p className="t-err"><AlertCircle size={14} /> {authError}</p>}
+                <button type="submit" className="t-btn" disabled={authBusy || signupCode.length !== 6}>
+                  {authBusy ? "…" : "verify & create account"} <ArrowRight size={16} />
+                </button>
+                <p className="t-cm" style={{ marginTop: 14 }}>
+                  {"// "}no email? check spam, or{" "}
+                  <button type="button" className="t-link" onClick={(e) => handleAuth(e as unknown as React.FormEvent)}>send a new code</button>
+                  {" · "}
+                  <button type="button" className="t-link" onClick={() => { setPendingEmail(null); setAuthError(""); }}>change details</button>
+                </p>
+              </form>
+            ) : (
+            <>
             <div className="t-tabs" role="tablist">
               <button type="button" role="tab" aria-selected={authMode === "login"} className={`t-tab${authMode === "login" ? " on" : ""}`} onClick={() => { setAuthMode("login"); setAuthError(""); }}>log in</button>
               <button type="button" role="tab" aria-selected={authMode === "signup"} className={`t-tab${authMode === "signup" ? " on" : ""}`} onClick={() => { setAuthMode("signup"); setAuthError(""); }}>sign up</button>
@@ -1546,9 +1780,11 @@ export default function Home() {
               </label>
               {authError && <p className="t-err"><AlertCircle size={14} /> {authError}</p>}
               <button type="submit" className="t-btn" disabled={authBusy}>
-                {authBusy ? "…" : authMode === "signup" ? "create account" : "open dashboard"} <ArrowRight size={16} />
+                {authBusy ? "…" : authMode === "signup" ? "email me a code" : "open dashboard"} <ArrowRight size={16} />
               </button>
             </form>
+            </>
+            )}
           </div>
         </div>
       </div>
@@ -1979,6 +2215,78 @@ export default function Home() {
         .r-last text { fill: var(--text); font-size: 12px; font-family: var(--font-code); }
         .overview-contests { margin-top: 16px; }
 
+        /* ── Profiles ──────────────────────────────────────── */
+        .donut { display: block; flex-shrink: 0; }
+        .donut-track { fill: none; stroke: var(--line-soft); stroke-width: 12; }
+        .donut-seg { fill: none; stroke-width: 12; transform: rotate(-90deg); transform-origin: 50% 50%; stroke-linecap: butt; animation: donutIn .9s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--d) * 120ms + 150ms); transition: stroke-width .2s; }
+        .donut-seg:hover { stroke-width: 15; }
+        .donut-total { fill: var(--text); font-size: 22px; font-weight: 700; font-family: var(--font-code); }
+        .donut-label { fill: var(--mute); font-size: 10.5px; font-family: var(--font-code); }
+        @keyframes donutIn { from { stroke-dasharray: 0 999; } }
+
+        .pf-summary { display: flex; align-items: center; gap: 28px; margin-bottom: 16px; flex-wrap: wrap; }
+        .pf-summary-text { flex: 1; min-width: 240px; }
+        .pf-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--dim); margin: 8px 0 14px; }
+        .pf-legend i, .pf-list i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 7px; vertical-align: 0; }
+        .pf-legend b { color: var(--text); margin-left: 4px; }
+        .pf-bars { display: flex; flex-direction: column; gap: 7px; }
+        .pf-bar-row { display: grid; grid-template-columns: 110px 1fr 56px; align-items: center; gap: 10px; font-size: 12px; color: var(--dim); }
+        .pf-bar-row b { color: var(--text); text-align: right; }
+        .pf-bar-track { height: 6px; background: var(--line-soft); border-radius: 0 3px 3px 0; overflow: hidden; }
+        .pf-bar-track span { display: block; height: 100%; border-radius: 0 3px 3px 0; animation: grow 1s cubic-bezier(.2,.8,.2,1) .2s both; transform-origin: left; }
+
+        .pf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; margin-bottom: 16px; }
+        .pf-card { display: flex; flex-direction: column; gap: 14px; }
+        .pf-card-head { display: flex; align-items: center; gap: 12px; }
+        .pf-mark { display: inline-grid; place-items: center; min-width: 34px; height: 34px; padding: 0 6px; border-radius: 7px; color: #0c0c0b; font-size: 11.5px; font-weight: 800; letter-spacing: -.3px; flex-shrink: 0; }
+        .pf-mark.small { min-width: 26px; height: 26px; font-size: 9.5px; border-radius: 5px; }
+        .pf-who { flex: 1; min-width: 0; }
+        .pf-site { font-size: 14px; font-weight: 600; }
+        .pf-handle { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--mute); text-decoration: none; }
+        .pf-handle:hover { color: var(--amber); }
+        .pf-remove { background: transparent; border: none; color: var(--mute); font-size: 11.5px; padding: 0; }
+        .pf-remove:hover { color: var(--red); }
+        .pf-body { display: flex; align-items: center; gap: 18px; }
+        .pf-list { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: var(--dim); flex: 1; }
+        .pf-list li { display: flex; align-items: center; }
+        .pf-list b { margin-left: auto; color: var(--text); }
+        .pf-total-only { flex-wrap: wrap; gap: 24px; min-height: 132px; align-content: center; }
+        .pf-total-only > div { display: flex; flex-direction: column; }
+        .pf-total-only span { font-size: 11.5px; color: var(--mute); }
+        .pf-big { font-size: 34px; font-weight: 700; letter-spacing: -1px; }
+        .pf-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--mute); border-top: 1px dashed var(--line-soft); padding-top: 10px; }
+        .pf-meta b { color: var(--text); font-weight: 600; }
+
+        .pf-row { border-top: 1px dashed var(--line-soft); }
+        .pf-row:first-of-type { border-top: none; }
+        .pf-row-main { display: grid; grid-template-columns: 26px 130px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 2px; }
+        .pf-row-name { font-size: 13.5px; font-weight: 600; }
+        .pf-row-url { font-size: 12px; color: var(--mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--line-soft); border-radius: 5px; padding: 6px 10px; background: rgba(255,255,255,0.015); }
+        .pf-row-url em { font-style: normal; color: var(--dim); }
+        .pf-connect-btn { background: transparent; border: 1px solid rgba(242,180,60,.45); border-radius: 5px; color: var(--amber); font-size: 12px; padding: 6px 12px; transition: background .2s; }
+        .pf-connect-btn:hover:not(:disabled) { background: rgba(242,180,60,.08); }
+        .pf-connect-btn:disabled { opacity: .5; }
+        .pf-ok { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green); }
+        .pf-soon { font-size: 11.5px; color: var(--mute); }
+        .pf-search { padding: 4px 0 14px 38px; animation: rise .3s ease-out both; }
+        .pf-search-box { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 6px 6px 12px; background: #0f0f0d; }
+        .pf-search-box:focus-within { border-color: rgba(242,180,60,.5); box-shadow: 0 0 0 4px rgba(242,180,60,.07); }
+        .pf-search-box svg { color: var(--mute); }
+        .pf-search-box input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--text); font-size: 13.5px; }
+        .pf-error { color: var(--red); font-size: 12px; margin-top: 8px; }
+        .pf-preview { display: flex; align-items: center; gap: 14px; margin-top: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,0.02); animation: pop .2s ease-out; flex-wrap: wrap; }
+        .pf-avatar { width: 48px; height: 48px; border-radius: 50%; border: 2px solid var(--amber); object-fit: cover; }
+        .pf-preview-who { flex: 1; min-width: 180px; }
+        .pf-preview-name { font-size: 15px; font-weight: 700; font-family: var(--font-sans); }
+        .pf-preview-handle { font-size: 12px; color: var(--mute); }
+        .pf-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+        .pf-chips span { font-size: 11.5px; background: var(--line-soft); border-radius: 4px; padding: 2px 8px; color: var(--dim); }
+        .pf-preview-ask { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--dim); }
+        .pf-yes { display: inline-flex; align-items: center; gap: 6px; background: var(--amber); color: #0c0c0b; border: none; border-radius: 99px; padding: 9px 16px; font-weight: 700; font-size: 13px; transition: transform .15s, box-shadow .2s; }
+        .pf-yes:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 26px rgba(242,180,60,.25); }
+        .ws-dropdown .ws-settings { color: var(--dim); }
+        .ws-dropdown .ws-settings:hover { background: rgba(255,255,255,.04); color: var(--text); }
+
         /* ── Motion ────────────────────────────────────────── */
         @keyframes rise { from { opacity: 0; transform: translateY(12px); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -2024,6 +2332,10 @@ export default function Home() {
           .log-row .when, .tag-cell { display: none; }
           .p-day .log-row { grid-template-columns: 12px 54px minmax(0, 1fr) auto; }
           .contest-grid { grid-template-columns: 1fr; }
+          .pf-row-main { grid-template-columns: 26px minmax(0, 1fr) auto; }
+          .pf-row-url { display: none; }
+          .pf-search { padding-left: 0; }
+          .pf-bar-row { grid-template-columns: 90px 1fr 48px; }
           .statusbar .sb-right { display: none; }
         }
       `}</style>
@@ -2048,6 +2360,7 @@ export default function Home() {
             </button>
             {workspaceOpen && (
               <div className="ws-dropdown">
+                <button type="button" className="ws-settings" onClick={() => { setActiveNav("Profiles"); setWorkspaceOpen(false); }}><Settings size={14} /> settings · connected profiles</button>
                 <button type="button" onClick={handleLogout}><LogOut size={14} /> logout</button>
               </div>
             )}
@@ -2765,6 +3078,166 @@ export default function Home() {
 
               </section>
             )}
+
+            {activeNav === "Profiles" && (() => {
+              const totalSolved = profiles.reduce((s, p) => s + (p.solved || 0), 0);
+              const withSolves = profiles.filter((p) => p.solved > 0);
+              const totals = ["easy", "medium", "hard"].map((label) => ({
+                label,
+                count: profiles.reduce((s, p) => s + (p.breakdown.find((b) => b.label === label)?.count ?? 0), 0),
+              }));
+              const site = (id: string) => PROFILE_SITES.find((s) => s.id === id);
+              return (
+                <section className="view" key="profiles">
+                  <div className="board-hero reveal" style={d(0)}>
+                    <p className="board-kicker">profiles · {profiles.length} connected</p>
+                    <h1 className="board-title">
+                      <span className="board-count"><CountUp value={totalSolved} /></span>
+                      problems, every site.
+                    </h1>
+                    <p className="board-sub">Connect your coding profiles once; prepboard keeps the counts fresh. Add or remove sites here any time.</p>
+                  </div>
+
+                  {withSolves.length > 0 && (
+                    <div className="panel pf-summary reveal" style={d(1)}>
+                      <Donut segments={totals} total={totals.reduce((s, t) => s + t.count, 0)} size={150} label="by difficulty" />
+                      <div className="pf-summary-text">
+                        <p className="panel-title">all sites<span className="ext">.sum</span></p>
+                        <p className="pf-legend">
+                          {totals.map((t) => (
+                            <span key={t.label}><i style={{ background: DIFF_COLORS[t.label] }} />{t.label} <b>{t.count.toLocaleString()}</b></span>
+                          ))}
+                        </p>
+                        <div className="pf-bars">
+                          {withSolves.map((p) => (
+                            <div key={p.platform} className="pf-bar-row">
+                              <span className="pf-bar-name">{site(p.platform)?.name}</span>
+                              <span className="pf-bar-track"><span style={{ width: `${(p.solved / Math.max(...withSolves.map((x) => x.solved))) * 100}%`, background: site(p.platform)?.color }} /></span>
+                              <b>{p.solved.toLocaleString()}</b>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="cm" style={{ fontSize: 11.5, marginTop: 8 }}>{"// "}easy/medium/hard only counts sites that share it; totals may count a problem on two sites twice</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pf-grid reveal" style={d(2)}>
+                    {profilesLoading && profiles.length === 0 && <p className="empty-note">{"// "}loading your profiles…</p>}
+                    {profiles.map((p) => {
+                      const s = site(p.platform);
+                      return (
+                        <div key={p.platform} className="panel pf-card">
+                          <div className="pf-card-head">
+                            <span className="pf-mark" style={{ background: s?.color }}>{s?.mark}</span>
+                            <div className="pf-who">
+                              <p className="pf-site">{s?.name}</p>
+                              <a href={p.profileUrl} target="_blank" rel="noreferrer" className="pf-handle">@{p.handle} <ExternalLink size={11} /></a>
+                            </div>
+                            {p.platform !== "leetcode" && (
+                              <button type="button" className="pf-remove" onClick={() => disconnectProfile(p.platform)} aria-label={`Disconnect ${s?.name}`}>remove</button>
+                            )}
+                          </div>
+                          {p.breakdown.length > 0 ? (
+                            <div className="pf-body">
+                              <Donut segments={p.breakdown} total={p.solved} />
+                              <ul className="pf-list">
+                                {p.breakdown.map((b) => (
+                                  <li key={b.label}><i style={{ background: DIFF_COLORS[b.label] ?? "#8d897f" }} />{b.label}<b>{b.count.toLocaleString()}</b></li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <div className="pf-body pf-total-only">
+                              {p.platform === "github" ? (
+                                <>
+                                  <div><b className="pf-big">{p.extra?.repos ?? 0}</b><span>repos</span></div>
+                                  <div><b className="pf-big">{p.extra?.followers ?? 0}</b><span>followers</span></div>
+                                </>
+                              ) : (
+                                <div><b className="pf-big">{p.solved.toLocaleString()}</b><span>solved</span></div>
+                              )}
+                              {p.platform !== "github" && <p className="cm" style={{ fontSize: 11 }}>{"// "}{s?.name} doesn&apos;t share an easy/medium/hard split</p>}
+                            </div>
+                          )}
+                          <div className="pf-meta">
+                            {p.rating != null && <span>rating <b>{p.rating.toLocaleString()}</b></span>}
+                            {p.rank && <span>{p.platform === "codeforces" ? "" : "rank "}<b>{p.rank}</b></span>}
+                            {p.extra?.stars ? <span><b>{p.extra.stars}★</b></span> : null}
+                            {p.extra?.maxRating ? <span>max <b>{p.extra.maxRating}</b></span> : null}
+                            {p.extra?.codingScore != null && <span>score <b>{p.extra.codingScore}</b></span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="panel pf-connect reveal" style={d(3)}>
+                    <div className="panel-head">
+                      <p className="panel-title">connect<span className="ext">.sites</span></p>
+                      {currentUser && profiles.length > 0 && (
+                        <button type="button" className="link-btn" onClick={() => fetchProfiles(currentUser.id, true)} disabled={profilesLoading}>
+                          {profilesLoading ? "refreshing…" : "refresh all"}
+                        </button>
+                      )}
+                    </div>
+                    {PROFILE_SITES.map((s) => {
+                      const connected = profiles.find((p) => p.platform === s.id);
+                      const open = connectSite === s.id;
+                      return (
+                        <div key={s.id} className={`pf-row${open ? " open" : ""}`}>
+                          <div className="pf-row-main">
+                            <span className="pf-mark small" style={{ background: s.color }}>{s.mark}</span>
+                            <span className="pf-row-name">{s.name}</span>
+                            <span className="pf-row-url">{s.prefix}<em>{connected ? connected.handle : "username"}</em></span>
+                            {!s.ready ? (
+                              <span className="pf-soon">coming later</span>
+                            ) : connected ? (
+                              <span className="pf-ok"><Check size={12} strokeWidth={3} /> connected</span>
+                            ) : (
+                              <button type="button" className="pf-connect-btn" onClick={() => open ? setConnectSite(null) : startConnect(s.id)}>{open ? "cancel" : "connect"}</button>
+                            )}
+                          </div>
+                          {open && (
+                            <div className="pf-search">
+                              <form onSubmit={lookupProfile} className="pf-search-box">
+                                <Search size={14} />
+                                <input autoFocus value={handleInput} onChange={(e) => setHandleInput(e.target.value)} placeholder={`your ${s.name} username or profile link`} aria-label={`${s.name} username`} />
+                                <button type="submit" className="pf-connect-btn" disabled={lookupState === "searching" || !handleInput.trim()}>{lookupState === "searching" ? "searching…" : "find"}</button>
+                              </form>
+                              {lookupState === "error" && <p className="pf-error">{lookupError}</p>}
+                              {lookupResult && (
+                                <div className="pf-preview">
+                                  {lookupResult.avatar ? <img src={lookupResult.avatar} alt="" className="pf-avatar" referrerPolicy="no-referrer" /> : <span className="pf-mark" style={{ background: s.color }}>{s.mark}</span>}
+                                  <div className="pf-preview-who">
+                                    <p className="pf-preview-name">{lookupResult.name}</p>
+                                    <p className="pf-preview-handle">@{lookupResult.handle}</p>
+                                    <p className="pf-chips">
+                                      {lookupResult.platform === "github"
+                                        ? <><span>{lookupResult.extra?.repos ?? 0} repos</span><span>{lookupResult.extra?.followers ?? 0} followers</span></>
+                                        : <span>{lookupResult.solved.toLocaleString()} solved</span>}
+                                      {lookupResult.rating != null && <span>{lookupResult.rating.toLocaleString()} rating</span>}
+                                      {lookupResult.rank && <span>{lookupResult.rank}</span>}
+                                    </p>
+                                  </div>
+                                  <div className="pf-preview-ask">
+                                    <span>is this you?</span>
+                                    <button type="button" className="pf-yes" onClick={confirmConnect} disabled={lookupState === "connecting"}>
+                                      <Check size={14} strokeWidth={3} /> {lookupState === "connecting" ? "connecting…" : "yes, connect"}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <p className="cm" style={{ fontSize: 11.5, marginTop: 10 }}>{"// "}hackerrank, interviewbit and code360 don&apos;t share public stats yet, so they can&apos;t be read.</p>
+                  </div>
+                </section>
+              );
+            })()}
 
             {activeNav === "Contests" && (
               <section className="view" key="contests">

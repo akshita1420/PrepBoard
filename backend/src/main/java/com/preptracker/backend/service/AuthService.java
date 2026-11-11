@@ -1,8 +1,10 @@
 package com.preptracker.backend.service;
 
 import com.preptracker.backend.model.AuthSession;
+import com.preptracker.backend.model.PendingSignup;
 import com.preptracker.backend.model.User;
 import com.preptracker.backend.repository.AuthSessionRepository;
+import com.preptracker.backend.repository.PendingSignupRepository;
 import com.preptracker.backend.repository.UserRepository;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -41,17 +43,91 @@ public class AuthService {
         }
     }
 
+    private static final Duration CODE_LIFETIME = Duration.ofMinutes(10);
+    private static final Duration RESEND_GAP = Duration.ofSeconds(30);
+    private static final int MAX_CODE_ATTEMPTS = 5;
+
+    private PendingSignupRepository pendingRepository;
+    private EmailService emailService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setSignupDependencies(PendingSignupRepository pendingRepository, EmailService emailService) {
+        this.pendingRepository = pendingRepository;
+        this.emailService = emailService;
+    }
+
     /**
-     * Creates an account. An account made before passwords existed (same email, no password yet)
-     * is claimed by setting its password.
+     * Step 1 of sign-up: checks the details and emails a 6-digit code. Nothing is created until the code
+     * is confirmed, so nobody can make an account with an email address they don't own.
      */
     public Map<String, Object> register(String name, String email, String leetcodeUsername, String password) {
         String mail = normalizeEmail(email);
         String leetcode = leetcodeUsername == null ? "" : leetcodeUsername.trim();
-        if (mail.isEmpty() || !mail.contains("@")) throw new AuthException(400, "Enter a valid email.");
+        if (mail.isEmpty() || !mail.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) throw new AuthException(400, "Enter a valid email.");
         if (leetcode.isEmpty()) throw new AuthException(400, "Enter your LeetCode username.");
         checkPassword(password);
+        checkAvailable(mail, leetcode);
 
+        PendingSignup pending = pendingRepository.findById(mail).orElse(null);
+        if (pending != null && pending.getSentAt() != null && pending.getSentAt().plus(RESEND_GAP).isAfter(Instant.now())) {
+            throw new AuthException(429, "A code was just sent. Wait 30 seconds before asking for another.");
+        }
+
+        String code = String.format("%06d", random.nextInt(1_000_000));
+        pendingRepository.save(PendingSignup.builder()
+                .email(mail)
+                .name(name == null || name.isBlank() ? leetcode : name.trim())
+                .leetcodeUsername(leetcode)
+                .passwordHash(encoder.encode(password))
+                .codeHash(sha256(mail + ":" + code))
+                .sentAt(Instant.now())
+                .expiresAt(Instant.now().plus(CODE_LIFETIME))
+                .attempts(0)
+                .build());
+        try {
+            emailService.sendSignupCode(mail, code);
+        } catch (Exception e) {
+            pendingRepository.deleteById(mail); // let them retry straight away
+            throw new AuthException(502, "Couldn't send the email. Check the address and try again.");
+        }
+        return Map.of("pending", true, "email", mail);
+    }
+
+    /** Step 2 of sign-up: the emailed code creates the account (or claims an old password-less one). */
+    public Map<String, Object> verify(String email, String code) {
+        String mail = normalizeEmail(email);
+        PendingSignup pending = pendingRepository.findById(mail)
+                .orElseThrow(() -> new AuthException(400, "No sign-up in progress for this email. Start again."));
+        if (pending.getExpiresAt().isBefore(Instant.now())) {
+            pendingRepository.delete(pending);
+            throw new AuthException(400, "That code expired. Sign up again to get a new one.");
+        }
+        if (pending.getAttempts() >= MAX_CODE_ATTEMPTS) {
+            pendingRepository.delete(pending);
+            throw new AuthException(429, "Too many wrong codes. Sign up again to get a new one.");
+        }
+        String entered = code == null ? "" : code.replaceAll("\\s", "");
+        if (!MessageDigest.isEqual(sha256(mail + ":" + entered).getBytes(StandardCharsets.UTF_8),
+                pending.getCodeHash().getBytes(StandardCharsets.UTF_8))) {
+            pending.setAttempts(pending.getAttempts() + 1);
+            pendingRepository.save(pending);
+            throw new AuthException(400, "Wrong code. " + (MAX_CODE_ATTEMPTS - pending.getAttempts()) + " tries left.");
+        }
+
+        // Re-check: someone may have taken the email or LeetCode username in the meantime.
+        checkAvailable(mail, pending.getLeetcodeUsername());
+        User user = userRepository.findFirstByEmail(mail).orElseGet(User::new);
+        user.setEmail(mail);
+        user.setName(pending.getName());
+        user.setLeetcodeUsername(pending.getLeetcodeUsername());
+        if (user.getTimezone() == null) user.setTimezone("UTC");
+        user.setPasswordHash(pending.getPasswordHash());
+        user = userRepository.save(user);
+        pendingRepository.delete(pending);
+        return newSession(user);
+    }
+
+    private void checkAvailable(String mail, String leetcode) {
         Optional<User> existing = userRepository.findFirstByEmail(mail);
         if (existing.isPresent() && existing.get().getPasswordHash() != null) {
             throw new AuthException(409, "An account with this email already exists. Log in instead.");
@@ -60,15 +136,6 @@ public class AuthService {
         boolean leetcodeTaken = userRepository.findByLeetcodeUsernameIgnoreCase(leetcode).stream()
                 .anyMatch(u -> u.getPasswordHash() != null && !u.getEmail().equalsIgnoreCase(mail));
         if (leetcodeTaken) throw new AuthException(409, "That LeetCode username is already used by another account.");
-
-        User user = existing.orElseGet(User::new);
-        user.setEmail(mail);
-        user.setName(name == null || name.isBlank() ? leetcode : name.trim());
-        user.setLeetcodeUsername(leetcode);
-        if (user.getTimezone() == null) user.setTimezone("UTC");
-        user.setPasswordHash(encoder.encode(password));
-        user = userRepository.save(user);
-        return newSession(user);
     }
 
     public Map<String, Object> login(String email, String password) {

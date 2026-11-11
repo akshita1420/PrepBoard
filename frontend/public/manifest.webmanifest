@@ -1,10 +1,17 @@
 {
-  "name": "PrepTracker",
-  "short_name": "PrepTracker",
-  "description": "Daily prep tracker with study nudges and streak tracking.",
+  "name": "prepboard",
+  "short_name": "prepboard",
+  "description": "LeetCode consistency tracker with nudges, streaks and contest reminders.",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#0f0f11",
-  "theme_color": "#f59e0b",
-  "orientation": "portrait"
+  "background_color": "#0c0c0b",
+  "theme_color": "#0c0c0b",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }
