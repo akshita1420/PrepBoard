@@ -1,15 +1,13 @@
-# On every push to main: check that backend and frontend build, then redeploy on the VPS.
-# Needs repository secrets VPS_HOST, VPS_USER and VPS_SSH_KEY (see DEPLOY.md).
-name: build and deploy
+# On every push to main: check that the backend and frontend build.
+# Deploying is done by the VPS itself: a timer there checks GitHub every 2 minutes and rebuilds
+# when main has new commits (deploy/autodeploy.sh). GitHub can't reach the VPS over SSH, so it doesn't push.
+name: build
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
-
-concurrency:
-  group: deploy
-  cancel-in-progress: false
 
 jobs:
   build:
@@ -38,38 +36,3 @@ jobs:
         run: |
           npm ci
           npm run build
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Pull and restart on the VPS
-        env:
-          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-        run: |
-          # Secrets pasted on Windows can carry \r line endings or stray spaces; clean them up.
-          host=$(printf '%s' "$VPS_HOST" | tr -d '\r[:space:]')
-          user=$(printf '%s' "$VPS_USER" | tr -d '\r[:space:]')
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          if [ -z "$host" ] || [ -z "$user" ]; then echo "::error::VPS_HOST or VPS_USER secret is empty"; exit 1; fi
-          # Describe the secrets without printing them, so a wrong value is easy to spot in the run summary.
-          case "$host" in *@*|*/*|*:*) echo "::error::VPS_HOST should be just the server name (vps.aravindc.dev), without user@, https:// or a path";; esac
-          case "$user" in *@*|*.*) echo "::error::VPS_USER should be just the user name (root)";; esac
-          if getent hosts "$host" > /dev/null; then echo "::notice::VPS_HOST resolves (${#host} characters)"; else echo "::error::VPS_HOST (${#host} characters) does not resolve to an IP address"; fi
-          if timeout 10 bash -c "</dev/tcp/$host/22" 2>/dev/null; then echo "::notice::port 22 on VPS_HOST is reachable"; else echo "::error::port 22 on VPS_HOST is not reachable"; fi
-          if ! ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null; then
-            echo "::error::VPS_SSH_KEY isn't a readable private key. Paste the whole file, including the BEGIN and END lines."
-            exit 1
-          fi
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -o BatchMode=yes "$user@$host" '
-            set -e
-            cd /opt/prepboard
-            git pull --ff-only
-            docker compose up -d --build
-            docker image prune -f --filter label=com.docker.compose.project=prepboard
-            docker compose ps --format "{{.Service}}: {{.Status}}"
-          '

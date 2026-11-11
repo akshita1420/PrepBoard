@@ -1,0 +1,5 @@
+# Scripts and service files run on Linux: always store them with LF line endings.
+*.sh text eol=lf
+deploy/* text eol=lf
+Caddyfile text eol=lf
+docker-compose.yml text eol=lf

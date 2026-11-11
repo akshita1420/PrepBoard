@@ -54,22 +54,20 @@ Open `https://<your domain>`. Caddy gets the HTTPS certificate automatically on 
 
 VAPID keys for browser push: run `npx web-push generate-vapid-keys` anywhere and paste both into `.env`.
 
-## 3. Auto-deploy from GitHub (once)
+## 3. Auto-deploy (once)
 
-On your laptop, make a key just for deploys:
+The VPS pulls updates itself: a systemd timer checks GitHub every 2 minutes and rebuilds when `main`
+has new commits. (GitHub's servers can't reach this VPS over SSH, so GitHub doesn't push.)
 
 ```bash
-ssh-keygen -t ed25519 -f prepboard-deploy -N ""
+cp /opt/prepboard/deploy/prepboard-autodeploy.service /opt/prepboard/deploy/prepboard-autodeploy.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now prepboard-autodeploy.timer
 ```
 
-- Put the **public** key on the VPS: append the contents of `prepboard-deploy.pub` to `/root/.ssh/authorized_keys`.
-- In GitHub → the repo → **Settings → Secrets and variables → Actions → New repository secret**, add:
-  - `VPS_HOST` = `vps.aravindc.dev`
-  - `VPS_USER` = `root`
-  - `VPS_SSH_KEY` = the full contents of the **private** key file `prepboard-deploy`
-
-Push anything to `main` and watch it under the repo's **Actions** tab.
-If the repo is private, the VPS also needs read access to pull it (a GitHub deploy key on the VPS).
+Check it: `systemctl list-timers prepboard-autodeploy.timer` and `journalctl -u prepboard-autodeploy -n 20`.
+GitHub Actions still builds every push, so a broken commit shows up red in the **Actions** tab.
+If the repo is private, the VPS needs read access to pull it (a GitHub deploy key on the VPS).
 
 ## 4. The pixel car on someone's laptop
 

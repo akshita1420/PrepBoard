@@ -1,0 +1,10 @@
+[Unit]
+Description=Check GitHub for new prepboard commits every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=prepboard-autodeploy.service
+
+[Install]
+WantedBy=timers.target
