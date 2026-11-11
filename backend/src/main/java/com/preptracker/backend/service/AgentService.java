@@ -203,15 +203,22 @@ public class AgentService {
     public byte[] buildInstallerZip(String serverUrl) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
-            for (String name : List.of("install.cmd", "install.ps1", "uninstall.cmd", "agent.ps1", "README.txt")) {
-                String text = read("agent/" + name).replace("__PREPBOARD_SERVER__", serverUrl);
-                zip.putNextEntry(new ZipEntry("prepboard-helper/" + name));
+            // Only two things at the top, so it's obvious what to double-click; the scripts live in "files".
+            Map<String, String> entries = new LinkedHashMap<>();
+            entries.put("INSTALL - double-click me.cmd", "agent/install.cmd");
+            entries.put("README.txt", "agent/README.txt");
+            entries.put("files/install.ps1", "agent/install.ps1");
+            entries.put("files/agent.ps1", "agent/agent.ps1");
+            entries.put("files/uninstall.cmd", "agent/uninstall.cmd");
+            entries.put("files/README.txt", "agent/README.txt");
+            entries.put("files/nudge-car.ps1", "desktop/nudge-car.ps1");
+            for (Map.Entry<String, String> e : entries.entrySet()) {
+                String text = read(e.getValue()).replace("__PREPBOARD_SERVER__", serverUrl);
+                if (e.getKey().endsWith(".cmd")) text = text.replace("\r\n", "\n").replace("\n", "\r\n"); // cmd wants CRLF
+                zip.putNextEntry(new ZipEntry("prepboard-helper/" + e.getKey()));
                 zip.write(text.getBytes(StandardCharsets.UTF_8));
                 zip.closeEntry();
             }
-            zip.putNextEntry(new ZipEntry("prepboard-helper/nudge-car.ps1"));
-            zip.write(read("desktop/nudge-car.ps1").getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
         }
         return bytes.toByteArray();
     }
