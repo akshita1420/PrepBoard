@@ -1,5 +1,5 @@
 # prepboard
-
+[Visit PrepBoard](https://prepboard.aravindc.dev/)
 A LeetCode consistency tracker that looks like a code editor.
 
 - **overview.tsx**: streaks (current and longest), today's target, a git-style contribution graph, weekly chart, daily targets and the nudge.
