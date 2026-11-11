@@ -223,6 +223,21 @@ public class AgentService {
         return bytes.toByteArray();
     }
 
+    /** One shell script for Linux (curl … | bash) with the helper files and this server's address inside. */
+    public String buildLinuxInstaller(String serverUrl) throws IOException {
+        java.util.function.Function<String, String> b64 = s -> Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));
+        return lf(read("agent-linux/install.sh"))
+                .replace("__AGENT_B64__", b64.apply(lf(read("agent-linux/agent.py"))))
+                .replace("__CAR_B64__", b64.apply(lf(read("agent-linux/nudge-car.py"))))
+                .replace("__UNINSTALL_B64__", b64.apply(lf(read("agent-linux/uninstall.sh"))))
+                .replace("__PREPBOARD_SERVER__", serverUrl);
+    }
+
+    // Linux scripts must have LF line endings, even if they were checked out on Windows.
+    private static String lf(String text) {
+        return text.replace("\r\n", "\n");
+    }
+
     private static String read(String path) throws IOException {
         try (InputStream in = new ClassPathResource(path).getInputStream()) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);

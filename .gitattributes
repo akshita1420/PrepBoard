@@ -3,3 +3,5 @@
 deploy/* text eol=lf
 Caddyfile text eol=lf
 docker-compose.yml text eol=lf
+backend/src/main/resources/agent-linux/* text eol=lf
+*.py text eol=lf

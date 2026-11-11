@@ -45,6 +45,15 @@ public class AgentController {
         }
     }
 
+    // Linux: curl -fsSL https://<server>/api/agent/install.sh | bash
+    @GetMapping(value = "/install.sh", produces = "text/x-shellscript")
+    public ResponseEntity<String> linuxInstaller() throws IOException {
+        String server = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/x-shellscript; charset=utf-8"))
+                .body(agentService.buildLinuxInstaller(server));
+    }
+
     // The helper installer, with this server's public address baked in.
     @GetMapping("/download")
     public ResponseEntity<byte[]> download() throws IOException {

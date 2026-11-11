@@ -650,6 +650,11 @@ export default function Home() {
   const [agents, setAgents] = useState<{ id: number; name: string; lastSeenAt: string | null }[]>([]);
   const [agentCode, setAgentCode] = useState<{ code: string; expiresAt: number } | null>(null);
   const [helperOpen, setHelperOpen] = useState(false);
+  // Which install steps to show; starts on the system this browser runs on.
+  const [helperOs, setHelperOs] = useState<"windows" | "linux">(() =>
+    typeof navigator !== "undefined" && /Linux/i.test(navigator.userAgent) && !/Android/i.test(navigator.userAgent) ? "linux" : "windows");
+  const [cmdCopied, setCmdCopied] = useState(false);
+  const linuxInstallCommand = `curl -fsSL ${API_BASE || (typeof window !== "undefined" ? window.location.origin : "")}/api/agent/install.sh | bash`;
 
   // ── Session restore ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -2037,6 +2042,9 @@ export default function Home() {
         .helper-steps a { color: var(--amber); }
         .helper-steps b { color: var(--text); font-weight: 600; }
         .helper-code { font-size: 15px; letter-spacing: 3px; color: var(--amber) !important; background: rgba(242,180,60,.08); border: 1px solid rgba(242,180,60,.35); border-radius: 4px; padding: 1px 8px; user-select: all; }
+        .helper-os { display: flex; gap: 6px; margin: 10px 0 4px; }
+        .helper-cmd { display: flex; align-items: center; gap: 8px; margin: 6px 0 2px; padding: 7px 9px; background: #0f0f0d; border: 1px solid var(--line); border-radius: 5px; }
+        .helper-cmd code { flex: 1; min-width: 0; font-size: 11px; color: var(--green); overflow-x: auto; white-space: nowrap; }
         .helper-device { display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 6px 0; border-top: 1px dashed var(--line-soft); }
         .helper-device .cm { margin-left: auto; }
         .helper-unlink { background: transparent; border: none; color: var(--mute); font-size: 11px; padding: 0; }
@@ -2802,16 +2810,39 @@ export default function Home() {
                     {helperOpen && (
                       <div className="helper-box">
                         <p className="helper-copy">{"// "}shows the car on your windows laptop even when this site is closed. install once, then it&apos;s automatic.</p>
-                        <ol className="helper-steps">
-                          <li><a href={`${API_BASE}/api/agent/download`}>download the helper</a>, unzip it</li>
-                          <li>double-click <b>install.cmd</b></li>
-                          <li>
-                            paste this code:{" "}
-                            {agentCode && agentCode.expiresAt > now.getTime()
-                              ? <b className="helper-code">{agentCode.code}</b>
-                              : <button type="button" className="nudge-enable" onClick={getAgentCode}>get code</button>}
-                          </li>
-                        </ol>
+                        <div className="helper-os" role="tablist">
+                          {(["windows", "linux"] as const).map((os) => (
+                            <button key={os} type="button" role="tab" aria-selected={helperOs === os} className={`chip${helperOs === os ? " on" : ""}`} onClick={() => setHelperOs(os)}>{os}</button>
+                          ))}
+                        </div>
+                        {helperOs === "windows" ? (
+                          <ol className="helper-steps">
+                            <li><a href={`${API_BASE}/api/agent/download`}>download the helper</a>, then right-click the zip → <b>Properties</b> → tick <b>Unblock</b> → <b>Extract All</b></li>
+                            <li>double-click <b>INSTALL - double-click me</b></li>
+                            <li>
+                              type this code:{" "}
+                              {agentCode && agentCode.expiresAt > now.getTime()
+                                ? <b className="helper-code">{agentCode.code}</b>
+                                : <button type="button" className="nudge-enable" onClick={getAgentCode}>get code</button>}
+                            </li>
+                          </ol>
+                        ) : (
+                          <ol className="helper-steps">
+                            <li>
+                              open a terminal and run:
+                              <span className="helper-cmd">
+                                <code>{linuxInstallCommand}</code>
+                                <button type="button" className="nudge-enable" onClick={() => { navigator.clipboard?.writeText(linuxInstallCommand); setCmdCopied(true); setTimeout(() => setCmdCopied(false), 1500); }}>{cmdCopied ? "copied ✓" : "copy"}</button>
+                              </span>
+                            </li>
+                            <li>
+                              paste this code when it asks:{" "}
+                              {agentCode && agentCode.expiresAt > now.getTime()
+                                ? <b className="helper-code">{agentCode.code}</b>
+                                : <button type="button" className="nudge-enable" onClick={getAgentCode}>get code</button>}
+                            </li>
+                          </ol>
+                        )}
                         {agentCode && <p className="helper-copy">{"// "}code works for 15 minutes · waiting for your laptop…</p>}
                         {agents.map((a) => (
                           <div key={a.id} className="helper-device">
