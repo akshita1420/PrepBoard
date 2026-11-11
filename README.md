@@ -25,3 +25,25 @@ npm run dev
 ```
 
 Optional: set `LEETCODE_SESSION` / `LEETCODE_CSRF_TOKEN`, or connect LeetCode from the calendar page, to import your full submission history.
+
+
+## Windows Smart App Control – Installation Fix
+
+Windows Smart App Control may block the PrepBoard Helper scripts because they are downloaded from the internet and are not digitally signed by a recognized publisher.
+
+To resolve this, unblock the ZIP file **before extracting it**.
+
+### Steps to Fix
+
+1. Delete the existing `prepboard-helper` folder if you have already extracted it.
+2. Navigate to your **Downloads** folder and locate `prepboard-helper.zip`.
+3. Right-click the ZIP file and select **Properties**.
+4. Under the **General** tab, look for the **Security** section at the bottom.
+5. Check the **Unblock** checkbox and click **Apply → OK**.
+6. Right-click the ZIP file and select **Extract All**.
+7. Open the extracted `prepboard-helper` folder.
+8. Double-click **INSTALL - double-click me** to start the installation.
+
+> **Important:** Unblock the ZIP before extracting it so that the downloaded-file security marker is not propagated to the extracted files.
+
+**Note:** The Unblock option is generally available for files marked as downloaded from the internet. It does not guarantee that Smart App Control will allow every script to run. If Windows still blocks the installer, inspect the script and use a trusted, properly signed executable rather than disabling Windows security.
